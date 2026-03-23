@@ -675,20 +675,18 @@ function dispatchRespondFlor(action) {
 
 function dispatchGoToMazo() {
   if (!G?.onlineMode) {
-    goToMazo();
+    goToMazo(); // handles modal internally
     return;
   }
-  // Online: show local confirmation modal, then send to server on confirm
-  const viewerSeat  = G.viewerSeat ?? 0;
-  const viewerTeam  = G.players[viewerSeat]?.team ?? 0;
-  const oppTeam     = 1 - viewerTeam;
-  const betLevel    = G.bet?.level ?? 0;
-  const pts         = [1, 2, 3, 4][betLevel] ?? 1;
-  const p           = G.players[viewerSeat];
-  const oppName     = G.players.find(pl => pl.team === oppTeam)?.name || `Eq ${oppTeam}`;
+  // Online: show local confirmation then send to server
+  const vs      = G.viewerSeat ?? 0;
+  const p       = G.players[vs];
+  const oppTeam = 1 - (p?.team ?? 0);
+  const pts     = [1, 2, 3, 4][G.bet?.level ?? 0] ?? 1;
+  const oppName = G.players.find(pl => pl.team === oppTeam)?.name || 'Rival';
   showModal('danger',
     `${p?.name || 'Vos'} se va al Mazo`,
-    `<strong>${oppName}</strong> cobra <strong>${pts} pts</strong> de Truco.`,
+    `<strong>${oppName}</strong> cobra <strong>${pts} pts</strong>.`,
     pts,
     [
       { label: 'Confirmar', cls: 'danger', cb: () => { closeModal(); sendGoToMazo(); }},
@@ -780,21 +778,22 @@ export function renderArena() {
     zone.className = 'arena-seat-zone';
     zone.dataset.seat = String(seat);
 
-    // History stack: previous tricks for this seat, stacked behind
+    // History row: previous tricks for this seat, horizontal, upright
     if ((G.trickHistory || []).length > 0) {
       const stackWrap = document.createElement('div');
       stackWrap.className = 'arena-history-stack';
+      const sc = cScale * 0.80;
       G.trickHistory.forEach((entry, tidx) => {
         const e = entry.find(e => e.seat === seat);
         if (!e) return;
-        const jitter = ((seat * 7 + tidx * 13) % 14) - 7;
-        const offX   = (tidx - G.trickHistory.length + 1) * 5;
-        const sc     = cScale * 0.88;
-        const won    = G.trickWinners[tidx] === teamOf(seat);
-        const glow   = won ? (teamOf(seat) === 0 ? 'rgba(0,160,255,0.55)' : 'rgba(204,17,51,0.55)') : 'rgba(255,255,255,0.08)';
-        const hCard  = document.createElement('div');
+        const won  = G.trickWinners[tidx] === teamOf(seat);
+        const draw = G.trickWinners[tidx] === -1;
+        const glow = won  ? (teamOf(seat) === 0 ? 'rgba(0,160,255,0.7)'  : 'rgba(204,17,51,0.7)')
+                   : draw ? 'rgba(200,151,30,0.5)' : 'rgba(255,255,255,0.12)';
+        const hCard = document.createElement('div');
         hCard.className = 'history-stacked-card';
-        hCard.style.cssText = `transform:scale(${sc}) translate(${offX}px,${tidx*2}px) rotate(${jitter}deg);opacity:${0.28 + tidx*0.08};filter:drop-shadow(0 0 4px ${glow});`;
+        // Upright, no rotation, good opacity
+        hCard.style.cssText = `transform:scale(${sc});opacity:0.72;filter:drop-shadow(0 0 5px ${glow});`;
         hCard.innerHTML = buildCardSVG(e.card.rank, e.card.suit, `hs_${tidx}_${seat}`);
         stackWrap.appendChild(hCard);
       });

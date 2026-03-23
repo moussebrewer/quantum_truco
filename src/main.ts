@@ -193,15 +193,14 @@ const APP_HTML = `<!-- ═══════════════════
       <div class="field-mine" id="field-mine">
         <div class="hand-row" id="hand-row"></div>
         <div class="envido-info" id="envido-info"></div>
+      <!-- Chant panel: floating square bottom-right -->
+      <div class="chant-bar">
+        <div class="chant-turn" id="chant-turn">Turno</div>
+        <div class="chant-btns" id="chant-btns"></div>
       </div>
 
     </div>
-  </div>
 
-  <!-- Action bar (replaces bottom-zone) -->
-  <div class="chant-bar">
-    <div class="chant-turn" id="chant-turn">Turno</div>
-    <div class="chant-btns" id="chant-btns"></div>
   </div>
 
 </div>

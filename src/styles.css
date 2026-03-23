@@ -207,7 +207,7 @@ body {
 .pass-sub { color: var(--muted); font-size: 0.95rem; line-height: 1.5; }
 
 /* ── MAIN GAME SCREEN ────────────────────── */
-#screen-game { flex-direction: column; height: 100vh; overflow: hidden; }
+#screen-game { flex-direction: column; height: 100vh; overflow: hidden; position: relative; }
 
 .game-header {
   background: var(--panel); border-bottom: 1px solid var(--border);
@@ -256,7 +256,7 @@ body {
 /* ── TABLE ───────────────────────────────── */
 .game-table {
   flex: 1; display: flex; flex-direction: row;
-  min-height: 0; overflow: hidden; position: relative;
+  min-height: 0; overflow: visible; position: relative;
 }
 
 /* Log sidebar: floating overlay */
@@ -275,7 +275,8 @@ body {
 /* Game field: 3 rows */
 .game-field {
   flex: 1; display: flex; flex-direction: column;
-  min-height: 0; overflow: hidden;
+  min-height: 0; overflow: visible;
+  position: relative; /* anchor for .chant-bar absolute */
 }
 
 /* TOP: opponent zone */
@@ -301,7 +302,7 @@ body {
   padding: 8px 12px 6px;
   border-top: 1px solid rgba(255,255,255,0.05);
   background: rgba(0,160,255,0.025);
-  overflow: hidden;
+  overflow: visible; /* allow cards to lift on hover */
 }
 
 /* CENTER: arena */
@@ -312,7 +313,7 @@ body {
     radial-gradient(ellipse 70% 60% at 50% 50%, rgba(0,80,160,0.07) 0%, transparent 80%),
     repeating-linear-gradient(0deg,transparent,transparent 44px,rgba(255,255,255,0.013) 44px,rgba(255,255,255,0.013) 45px),
     repeating-linear-gradient(90deg,transparent,transparent 44px,rgba(255,255,255,0.013) 44px,rgba(255,255,255,0.013) 45px);
-  overflow: visible; min-height: 0;
+  overflow: visible; min-height: 0; position: relative;
 }
 
 /* Arena slots: vertical, opponent on top / viewer on bottom */
@@ -322,22 +323,22 @@ body {
   gap: 10px; position: relative;
 }
 
-/* Per-seat zone: history stack + current card */
+/* Per-seat zone: history row + current card */
 .arena-seat-zone {
-  position: relative;
-  display: flex; align-items: center; justify-content: center;
-  min-width: 90px; min-height: 110px;
+  display: flex; flex-direction: row;
+  align-items: center; justify-content: center;
+  gap: 4px; min-height: 100px;
 }
 
-/* History stack: absolutely behind current card */
+/* History stack: horizontal row next to current card */
 .arena-history-stack {
-  position: absolute;
-  display: flex; align-items: center; justify-content: center;
-  inset: 0; pointer-events: none; z-index: 0;
+  display: flex; flex-direction: row;
+  align-items: center; gap: 3px;
+  pointer-events: none; z-index: 0;
 }
 .history-stacked-card {
-  position: absolute;
-  transform-origin: center bottom;
+  flex-shrink: 0;
+  /* no absolute, no rotation — laid out as a flex row */
 }
 .history-stacked-card svg { display: block; }
 
@@ -393,10 +394,11 @@ body {
 .arena-slot.dropping > div { animation: cardSlideDown 1.3s cubic-bezier(0.22,1,0.36,1) both; }
 
 .baza-result {
-  position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
-  font-family: 'Cinzel', serif; font-size: 1rem; letter-spacing: 0.15em;
+  position: absolute; right: 16px; top: 50%; transform: translateY(-50%);
+  font-family: 'Cinzel', serif; font-size: 0.88rem; letter-spacing: 0.12em;
   color: var(--gold); text-transform: uppercase; pointer-events: none;
   white-space: nowrap; text-shadow: 0 0 20px rgba(200,151,30,0.5);
+  writing-mode: vertical-rl; text-orientation: mixed;
 }
 
 /* Mazo apilado */
@@ -444,26 +446,33 @@ body {
 .envido-stat-label { font-size:0.72rem; color:rgba(255,255,255,0.35); letter-spacing:0.08em; text-transform:uppercase; }
 .envido-stat-val { font-size:1.1rem; color:var(--gold); font-weight:700; }
 
-/* ── CHANT BAR ───────────────────────────── */
+/* ── CHANT PANEL: floating square bottom-right ──────────── */
 .chant-bar {
-  flex-shrink: 0;
-  background: var(--panel2);
-  border-top: 1px solid var(--border);
-  padding: 6px 10px 6px 12px;
-  display: flex; align-items: flex-start;
-  gap: 10px; min-height: 72px; max-height: 108px;
-  overflow: hidden;
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 20;
+  width: 220px;
+  background: rgba(8,12,24,0.93);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 9px 9px;
+  display: flex; flex-direction: column;
+  gap: 6px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.6);
+  backdrop-filter: blur(8px);
+  pointer-events: all;
 }
 .chant-turn {
-  font-family: 'Cinzel', serif; font-size: 0.66rem; letter-spacing: 0.06em;
-  color: var(--muted); text-transform: uppercase; flex-shrink: 0;
-  width: 54px; padding-top: 2px; word-break: break-word; line-height: 1.4;
+  font-family: 'Cinzel', serif; font-size: 0.65rem; letter-spacing: 0.08em;
+  color: var(--muted); text-transform: uppercase; text-align: center;
+  padding-bottom: 5px; border-bottom: 1px solid var(--border);
+  line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .chant-btns {
-  flex: 1; display: grid;
+  display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 5px; align-content: start;
-  min-width: 0;
 }
 .act-btn.full-width { grid-column: 1 / -1; }
 /* Dynamic canto state display */

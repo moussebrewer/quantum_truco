@@ -935,29 +935,37 @@ function collapseThisTrick() {
 }
 
 export function goToMazo() {
-  clearChantPending();
-  const seat    = G.activeSeat;
+  // Use activeSeat, or viewerSeat in online mode
+  const seat    = (G.onlineMode && G.viewerSeat !== undefined && G.viewerSeat !== null)
+                  ? G.viewerSeat : G.activeSeat;
   const p       = G.players[seat];
+  if (!p) return;
   const oppTeam = 1 - p.team;
-  const pts     = TRUCO_LEVELS[G.bet.level].pts;
+  // pts = current truco stake (what the opponent wins when we fold)
+  const pts     = TRUCO_LEVELS[G.bet.level]?.pts ?? 1;
+
+  const doMazo = () => {
+    clearChantPending();
+    G.handScore[oppTeam] += pts;
+    uiLog(`${p.name} al mazo. Oponente cobra ${pts} pts.`, 'points');
+    // Settle envido too if it was accepted
+    finalizeHand();
+  };
 
   if (headlessMode || typeof document === 'undefined' || !runtime.showModal) {
-    G.handScore[oppTeam] += pts;
-    uiLog(`${p.name} al mazo. Eq ${oppTeam} cobra ${pts} pts.`, 'points');
-    finalizeHand();
+    doMazo();
     return;
   }
 
+  const oppName = G.players.find(pl => pl.team === oppTeam)?.name || `Equipo ${oppTeam}`;
   runtime.showModal('danger',
     `${p.name} se va al Mazo`,
-    `Eq ${oppTeam} cobra <strong>${pts} pts</strong> de Truco.`,
+    `<strong>${oppName}</strong> cobra <strong>${pts} pts</strong>.`,
     pts,
     [
       { label: 'Confirmar', cls: 'danger', cb: () => {
-          G.handScore[oppTeam] += pts;
-          uiLog(`${p.name} al mazo. Eq ${oppTeam} cobra ${pts} pts.`, 'points');
           if (runtime.closeModal) runtime.closeModal();
-          finalizeHand();
+          doMazo();
       }},
       { label: 'Cancelar', cls: 'primary', cb: () => { if (runtime.closeModal) runtime.closeModal(); } },
     ]
