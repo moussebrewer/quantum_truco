@@ -130,6 +130,18 @@ export function initSetupOptions() {
   });
 
   updateSetupModeUi(setupCfg.mode);
+
+  // Player name input
+  const nameInput = document.getElementById('player-name-input') as HTMLInputElement | null;
+  if (nameInput) {
+    const saved = localStorage.getItem('qt-player-name');
+    if (saved) { nameInput.value = saved; setupCfg.playerName = saved; }
+    nameInput.addEventListener('input', () => {
+      const v = nameInput.value.trim() || 'Jugador 1';
+      setupCfg.playerName = v;
+      localStorage.setItem('qt-player-name', v);
+    });
+  }
 }
 
 
@@ -665,14 +677,16 @@ function dispatchGoToMazo() {
     return;
   }
   // Online: show local confirmation modal, then send to server on confirm
-  const oppTeam = 1 - (G.players[G.viewerSeat]?.team ?? 0);
-  const pts     = (G.bet?.level >= 0 && G.bet?.level <= 3)
-    ? [1, 2, 3, 4][G.bet.level]
-    : 1;
-  const p = G.players[G.viewerSeat];
+  const viewerSeat  = G.viewerSeat ?? 0;
+  const viewerTeam  = G.players[viewerSeat]?.team ?? 0;
+  const oppTeam     = 1 - viewerTeam;
+  const betLevel    = G.bet?.level ?? 0;
+  const pts         = [1, 2, 3, 4][betLevel] ?? 1;
+  const p           = G.players[viewerSeat];
+  const oppName     = G.players.find(pl => pl.team === oppTeam)?.name || `Eq ${oppTeam}`;
   showModal('danger',
     `${p?.name || 'Vos'} se va al Mazo`,
-    `Eq ${oppTeam} cobra <strong>${pts} pts</strong> de Truco.`,
+    `<strong>${oppName}</strong> cobra <strong>${pts} pts</strong> de Truco.`,
     pts,
     [
       { label: 'Confirmar', cls: 'danger', cb: () => { closeModal(); sendGoToMazo(); }},
@@ -697,6 +711,20 @@ function updateHeader() {
   const { scores, target, handNum, bet } = G;
   renderTally('score-tally-0', scores[0], 0);
   renderTally('score-tally-1', scores[1], 1);
+
+  // Dynamic team names: viewer is "Vos", opponent is their name
+  const viewerSeat = getViewerSeatForRender();
+  const viewerTeam = G.players[viewerSeat]?.team ?? 0;
+  const oppTeam    = 1 - viewerTeam;
+  const myName     = G.players[viewerSeat]?.name || 'Vos';
+  const oppPlayers = G.players.filter(p => p.team === oppTeam);
+  const oppName    = oppPlayers.length === 1 ? oppPlayers[0].name : 'Ellos';
+
+  const nameT0 = document.querySelector('.score-team-name.t0');
+  const nameT1 = document.querySelector('.score-team-name.t1');
+  if (nameT0) nameT0.textContent = viewerTeam === 0 ? myName : oppName;
+  if (nameT1) nameT1.textContent = viewerTeam === 1 ? myName : oppName;
+
   document.getElementById('hdr-round').textContent = `Mano ${handNum} · Baza ${G.trickIdx+1}`;
   const lvl = TRUCO_LEVELS[bet.level];
   document.getElementById('hdr-bet').textContent = `Truco: ${lvl.name} (${lvl.pts} pt${lvl.pts>1?'s':''})`;
@@ -883,6 +911,9 @@ export function renderHand() {
 }
 
 function renderEnvidoInfo(p, el) {
+  // Don't show metrics when hand-row is empty (deal animation in progress)
+  const handRow = document.getElementById('hand-row');
+  if (!handRow || handRow.children.length === 0) { el.innerHTML = ''; return; }
   const liveHand = p.hand.map(qc => {
     const visibleCard = getVisibleCard(qc);
     return visibleCard
@@ -890,6 +921,8 @@ function renderEnvidoInfo(p, el) {
       : qc;
   });
   const lm = envidoMetric(liveHand);
+  // Sanity check — if metrics look infinite/NaN don't show
+  if (!isFinite(lm.mu) || isNaN(lm.mu)) { el.innerHTML = ''; return; }
   let html = `
     <div class="envido-stat"><span class="envido-stat-label">Envido μ</span><span class="envido-stat-val">${lm.mu.toFixed(1)}</span></div>
     <div class="envido-stat"><span class="envido-stat-label">P(≥28)</span><span class="envido-stat-val">${(lm.p28*100).toFixed(0)}%</span></div>

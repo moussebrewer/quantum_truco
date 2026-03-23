@@ -70,6 +70,23 @@ body {
   color: rgba(168,85,247,0.7); text-align: center; margin-bottom: 32px;
   text-transform: uppercase; position: relative; z-index: 1;
 }
+.player-name-input {
+  background: rgba(255,255,255,0.07);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: 'Space Mono', monospace;
+  font-size: 0.88rem;
+  padding: 7px 12px;
+  outline: none;
+  width: 160px;
+  transition: border-color 0.18s;
+}
+.player-name-input:focus {
+  border-color: var(--gold);
+}
+.player-name-input::placeholder { color: rgba(255,255,255,0.22); }
+
 .setup-version {
   font-family: 'Space Mono', monospace;
   font-size: 0.7rem;
@@ -324,6 +341,7 @@ body {
   display:flex; flex-direction:row; flex-shrink:0;
   background:var(--panel2); border-top:1px solid var(--border);
   overflow:visible; position:relative;
+  min-height:168px; /* fixed height — prevents layout jump when buttons appear */
 }
 .hand-area {
   flex:1; display:flex; flex-direction:column; padding:10px 12px 16px;
@@ -353,6 +371,7 @@ body {
 .chant-panel {
   width:252px; flex-shrink:0; display:flex; flex-direction:column;
   border-left:1px solid var(--border); padding:8px; gap:6px; overflow-y:auto;
+  height:100%; box-sizing:border-box; min-height:0;
 }
 .chant-turn {
   font-family:'Cinzel',serif; font-size:0.7rem; letter-spacing:0.07em;

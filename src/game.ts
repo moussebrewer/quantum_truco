@@ -2,7 +2,7 @@
 // Refactor of the original single-file Quantum Truco source.
 // This file owns game state, rules, flow, and gameplay mutations.
 
-export const setupCfg = { tableSize:2, target:15, conFlor:false, mode:'human' };
+export const setupCfg = { tableSize:2, target:15, conFlor:false, mode:'human', playerName:'Jugador 1' };
 export let florOn = false;
 
 const runtime = {
@@ -453,8 +453,8 @@ function newGame(cfg) {
   for (let seat=0; seat<tableSize; seat++) {
     const hand = deck.deal(3);
     players.push({
-      name: tableSize===2 ? (seat===0 ? 'Jugador 1' : 'Jugador 2')
-                          : (seat===0 ? 'J1 (Eq.A)' : seat===1 ? 'J2 (Eq.B)' : seat===2 ? 'J3 (Eq.A)' : 'J4 (Eq.B)'),
+      name: tableSize===2 ? (seat===0 ? (cfg.playerName||'Vos') : 'Rival')
+                          : (seat===0 ? (cfg.playerName||'J1') : seat===1 ? 'J2' : seat===2 ? 'J3' : 'J4'),
       seat,
       team: teamOf(seat),
       hand: hand.slice(),  // quantum cards

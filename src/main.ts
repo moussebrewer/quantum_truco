@@ -59,7 +59,7 @@ const APP_HTML = `<!-- ═══════════════════
 <!-- ══════════════════════════════════════════════════════════ -->
 <div id="screen-setup" class="screen active">
   <h1 class="setup-title">QUANTUM ⊗ TRUCO</h1>
-  <div class="setup-version">v0.1</div>
+  <div class="setup-version">v0.1.1</div>
   <div class="setup-card">
     <div class="setup-row">
       <span class="setup-label">Modo</span>
@@ -109,6 +109,11 @@ const APP_HTML = `<!-- ═══════════════════
         </div>
       </div>
       <div class="online-status" id="online-status">Elegí crear una sala o ingresá un código para unirte.</div>
+    </div>
+    <div class="setup-divider"></div>
+    <div class="setup-row">
+      <span class="setup-label">Tu nombre</span>
+      <input id="player-name-input" class="player-name-input" maxlength="18" placeholder="Jugador 1" autocomplete="off" />
     </div>
     <button class="start-btn" id="btn-start-game" onclick="startGame()">COMENZAR PARTIDA →</button>
   </div>

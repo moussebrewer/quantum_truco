@@ -306,6 +306,12 @@ function installStateEnvelope(envelope) {
   state.roomReady         = envelope.roomReady;
 
   installOnlineState(state); // G = state
+  // Override viewer's player name with locally-stored name
+  const vSeat = session.seat;
+  if (vSeat !== null && G?.players?.[vSeat] && setupCfg.playerName) {
+    G.players[vSeat].name = setupCfg.playerName;
+    state.players[vSeat].name = setupCfg.playerName;
+  }
   _prevG = cloneGameState(state);
 
   setHeaderStatus(envelope.statusText || 'En línea');
