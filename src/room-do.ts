@@ -19,6 +19,7 @@ import {
   envidoCanRaise,
   canTeamRaiseNow,
   teamOf,
+  serverStartNextHand,
 } from './game';
 
 export interface Env {
@@ -108,6 +109,8 @@ function filterStateForSeat(fullState, seat, meta) {
   state.statusText = computeStatusText(meta, state, seat);
   state.players = state.players.map((player) => {
     if (player.seat === seat) return player;
+    // At hand_end: reveal all cards so client can show envido/flor results
+    if (fullState.phase === 'hand_end' || fullState.phase === 'match_end') return player;
     return {
       ...player,
       hand: new Array(player.hand.length).fill(0).map(() => hiddenCard()),
@@ -158,6 +161,7 @@ function validateIntent(state, seat, intent) {
     return !!state.conFlor && !state.chant.flor.resolved && !state.chant.florBlockedEnvido;
   }
   if (intent.type === 'go_to_mazo') return true;
+  if (intent.type === 'next_hand') return state.phase === 'hand_end';
   return false;
 }
 
@@ -192,6 +196,9 @@ function applyIntentToState(state, intent) {
         break;
       case 'go_to_mazo':
         goToMazo();
+        break;
+      case 'next_hand':
+        serverStartNextHand();
         break;
       default:
         break;
@@ -368,6 +375,16 @@ export class RoomDurableObject {
     this.game = applyIntentToState(this.game, intent);
     await this.persist();
     this.broadcastState();
+
+    // At hand_end: auto-advance to next hand after 7s if no client sends 'next_hand'
+    if (this.game?.phase === 'hand_end' && !this.game?.matchEnded) {
+      setTimeout(async () => {
+        if (!this.game || this.game.phase !== 'hand_end') return;
+        this.game = applyIntentToState(this.game, { type: 'next_hand' });
+        await this.persist();
+        this.broadcastState();
+      }, 7000);
+    }
   }
 
   async fetch(request) {
