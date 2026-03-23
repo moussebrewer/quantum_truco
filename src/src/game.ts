@@ -1444,5 +1444,6 @@ export function uiShowTrucoCallToast(phrase) { if (runtime.showTrucoCallToast) r
 export function uiShowTrucoToast(name)        { if (runtime.showTrucoToast) runtime.showTrucoToast(name); }
 export function uiRenderGameFull()            { if (runtime.renderGame) runtime.renderGame(); }
 export function uiRenderArenaOnly()           { if (runtime.renderArena) runtime.renderArena(); }
+export function uiShowEnvidoAnnouncement(res, pts, finalCards) { if (runtime.showEnvidoAnnouncement) runtime.showEnvidoAnnouncement(res, pts, finalCards); }
 
 // ── modal ────────────────────────────────────────────────────

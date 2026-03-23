@@ -59,6 +59,7 @@ const APP_HTML = `<!-- ═══════════════════
 <!-- ══════════════════════════════════════════════════════════ -->
 <div id="screen-setup" class="screen active">
   <h1 class="setup-title">QUANTUM ⊗ TRUCO</h1>
+  <div class="setup-version">v0.1</div>
   <div class="setup-card">
     <div class="setup-row">
       <span class="setup-label">Modo</span>
