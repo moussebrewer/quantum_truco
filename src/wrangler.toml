@@ -1,0 +1,11 @@
+name = "quantum-truco-online"
+main = "src/room-do.ts"
+compatibility_date = "2026-03-14"
+
+[[durable_objects.bindings]]
+name = "ROOM_DO"
+class_name = "RoomDurableObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RoomDurableObject"]
