@@ -2,7 +2,7 @@
 // Refactor of the original single-file Quantum Truco source.
 // This file owns game state, rules, flow, and gameplay mutations.
 
-export const setupCfg = { tableSize:2, target:15, conFlor:false, mode:'human', playerName:'Jugador 1' };
+export const setupCfg = { tableSize:2, target:15, conFlor:false, mode:'human', playerNames:['',''] };
 export let florOn = false;
 
 const runtime = {
@@ -453,8 +453,8 @@ function newGame(cfg) {
   for (let seat=0; seat<tableSize; seat++) {
     const hand = deck.deal(3);
     players.push({
-      name: tableSize===2 ? (seat===0 ? (cfg.playerName||'Vos') : 'Rival')
-                          : (seat===0 ? (cfg.playerName||'J1') : seat===1 ? 'J2' : seat===2 ? 'J3' : 'J4'),
+      name: tableSize===2 ? (seat===0 ? 'Jugador 1' : 'Jugador 2')
+                          : (seat===0 ? 'J1 (Eq.A)' : seat===1 ? 'J2 (Eq.B)' : seat===2 ? 'J3 (Eq.A)' : 'J4 (Eq.B)'),
       seat,
       team: teamOf(seat),
       hand: hand.slice(),  // quantum cards
@@ -521,6 +521,14 @@ export function startGame() {
   G.aiMode = setupCfg.mode;
   G.aiSeat = (setupCfg.mode !== 'human') ? 1 : null;
   G.aiThinking = false;
+  // Apply custom player names from setup (empty string = keep default)
+  if (G.tableSize === 2) {
+    const names = setupCfg.playerNames || [];
+    const n0 = (names[0] || '').trim();
+    const n1 = (names[1] || '').trim();
+    if (n0) G.players[0].name = n0;
+    if (n1) G.players[1].name = n1;
+  }
   if (G.aiSeat !== null) {
     G.players[G.aiSeat].name = setupCfg.mode === "ai_legend" ? "🃑 El Duende" : setupCfg.mode === "ai_expert" ? "🧉 Gaucho" : setupCfg.mode === "ai_hard" ? "🎩 Citadino" : "🃏 El Pibe";
   }
@@ -640,7 +648,7 @@ export function respondTruco(accept) {
     if (runtime.aiResume) runtime.aiResume();
   } else {
     G.handScore[raiserTeam] += curPts;
-    uiLog(`${G.players[responderSeat].name} rechaza. Eq ${raiserTeam} cobra ${curPts} pts.`, 'points');
+    uiLog(`${G.players[responderSeat].name} rechaza. ${teamName(raiserTeam)} cobra ${curPts} pts.`, 'points');
     finalizeHand();
   }
 }
@@ -691,7 +699,7 @@ export function respondEnvido(action) {
     clearChantPending();
     env.resolved = true;
     G.handScore[env.callerTeam] += rejPts;
-    uiLog(`${G.players[respSeat].name} rechaza. Eq ${env.callerTeam} cobra ${rejPts} pts.`, 'points');
+    uiLog(`${G.players[respSeat].name} rechaza. ${teamName(env.callerTeam)} cobra ${rejPts} pts.`, 'points');
     afterEnvidoResolved();
   } else {
     // raise — action is the call string; roles flip: responder becomes new caller
@@ -735,7 +743,7 @@ export function singFlor() {
     G.handScore[teamOf(seat)] += 3;
     G.chant.florBlockedEnvido = true;
     flor.resolved = true;
-    uiLog(`Flor sin rival. Eq ${teamOf(seat)} cobra 3 pts.`, 'points');
+    uiLog(`Flor sin rival. ${teamName(teamOf(seat))} cobra 3 pts.`, 'points');
     G.phase = 'play';
     G.activeSeat = G.playOrder[G.playOrderIdx];
     if (runtime.renderGame) runtime.renderGame(); if (runtime.aiResume) runtime.aiResume();
@@ -758,7 +766,7 @@ export function respondFlor(action) {
       G.handScore[teamOf(callerSeat)] += 3;
       G.chant.florBlockedEnvido = true;
       flor.resolved = true;
-      uiLog(`Sin flor rival. Eq ${teamOf(callerSeat)} cobra 3 pts.`, 'points');
+      uiLog(`Sin flor rival. ${teamName(teamOf(callerSeat))} cobra 3 pts.`, 'points');
       clearChantPending();
       G.phase = 'play'; G.activeSeat = G.playOrder[G.playOrderIdx]; if (runtime.renderGame) runtime.renderGame(); if (runtime.aiResume) runtime.aiResume();
     }
@@ -788,7 +796,7 @@ export function respondFlor(action) {
       const pts = data.alResto ? 4 : 3;
       G.handScore[teamOf(callerSeat)] += pts;
       flor.resolved = true; G.chant.florBlockedEnvido = true;
-      uiLog(`Rechaza contraflor. Eq ${teamOf(callerSeat)} cobra ${pts} pts.`, 'points');
+      uiLog(`Rechaza contraflor. ${teamName(teamOf(callerSeat))} cobra ${pts} pts.`, 'points');
       clearChantPending(); finalizeHand();
     }
   }
@@ -875,9 +883,13 @@ export function onCardClick(handIdx) {
     const destInner = destSlot ? destSlot.querySelector('div') : null;
     if (destInner) destInner.style.visibility = 'hidden';
 
-    const destRect = destSlot ? destSlot.getBoundingClientRect() : null;
-    const destCX   = destRect ? destRect.left + destRect.width  / 2 : srcCX;
-    const destCY   = destRect ? destRect.top  + destRect.height / 2 : srcCY + 200;
+    // Force a layout pass so the inner div has its final CSS-transformed position
+    destInner && destInner.getBoundingClientRect();
+    const destRect  = destSlot  ? destSlot.getBoundingClientRect()  : null;
+    // getBoundingClientRect on the inner element returns its visual (post-transform) rect
+    const innerRect = destInner ? destInner.getBoundingClientRect() : destRect;
+    const destCX   = innerRect ? innerRect.left + innerRect.width  / 2 : srcCX;
+    const destCY   = innerRect ? innerRect.top  + innerRect.height / 2 : srcCY + 200;
 
     ghost.getBoundingClientRect();
     ghost.style.transition = `left ${FLY}ms cubic-bezier(0.25,0.1,0.2,1),
@@ -934,27 +946,41 @@ function collapseThisTrick() {
 }
 
 export function goToMazo() {
-  clearChantPending();
+  // Guard: only valid when it is the active player's turn, no pending chant
+  if (!G || G.matchEnded) return;
+  if (G.pendingChant) return;
+  if (G.phase !== 'play' && G.phase !== 'chant') return;
+
   const seat    = G.activeSeat;
   const p       = G.players[seat];
+  if (!p) return;
   const oppTeam = 1 - p.team;
-  const pts     = TRUCO_LEVELS[G.bet.level].pts;
+  const betLevel = (G.bet && G.bet.level >= 0 && G.bet.level <= 3) ? G.bet.level : 0;
+  // If a deferred truco raise is pending, use its level for the pts
+  const effectiveLevel = (G.bet._pendingRaise && G.bet._pendingRaise.level != null)
+    ? G.bet._pendingRaise.level - 1   // pts for not-yet-accepted raise = previous level
+    : betLevel;
+  const pts = TRUCO_LEVELS[Math.max(0, effectiveLevel)].pts;
 
   if (headlessMode || typeof document === 'undefined' || !runtime.showModal) {
+    clearChantPending();
+    if (G.bet._pendingRaise) delete G.bet._pendingRaise;
     G.handScore[oppTeam] += pts;
-    uiLog(`${p.name} al mazo. Eq ${oppTeam} cobra ${pts} pts.`, 'points');
+    uiLog(`${p.name} al mazo. ${teamName(oppTeam)} cobra ${pts} pts.`, 'points');
     finalizeHand();
     return;
   }
 
   runtime.showModal('danger',
     `${p.name} se va al Mazo`,
-    `Eq ${oppTeam} cobra <strong>${pts} pts</strong> de Truco.`,
+    `${teamName(oppTeam)} cobra <strong>${pts} pts</strong> de Truco.`,
     pts,
     [
       { label: 'Confirmar', cls: 'danger', cb: () => {
+          clearChantPending();
+          if (G.bet._pendingRaise) delete G.bet._pendingRaise;
           G.handScore[oppTeam] += pts;
-          uiLog(`${p.name} al mazo. Eq ${oppTeam} cobra ${pts} pts.`, 'points');
+          uiLog(`${p.name} al mazo. ${teamName(oppTeam)} cobra ${pts} pts.`, 'points');
           if (runtime.closeModal) runtime.closeModal();
           finalizeHand();
       }},
@@ -1176,7 +1202,7 @@ function settleChants(includeTruco) {
     const tw  = resolveHandTruco(G.trickWinners, teamOf(G.manoSeat));
     const pts = TRUCO_LEVELS[G.bet.level].pts;
     G.handScore[tw] += pts;
-    uiLog(`Truco: Eq ${tw} gana ${pts} pts.`, 'points');
+    uiLog(`Truco: ${teamName(tw)} gana ${pts} pts.`, 'points');
   }
 
   // ── Envido ──
@@ -1213,17 +1239,17 @@ function settleChants(includeTruco) {
           ? Math.max(G.target - G.scores[1 - winner], 1)
           : Math.abs(teamFlorScores[0] - teamFlorScores[1]) + 3;
         G.handScore[winner] += pts;
-        uiLog(`${flor.contraflorAlResto?'Contraflor al Resto':'Contraflor'}: Eq ${winner} cobra ${pts} pts.`, 'points');
+        uiLog(`${flor.contraflorAlResto?'Contraflor al Resto':'Contraflor'}: ${teamName(winner)} cobra ${pts} pts.`, 'points');
       }
     } else if (!flor.contraflorCalled || !flor.contraflorAccepted) {
       if (florTeams.length === 1) {
         G.handScore[florTeams[0]] += 3;
-        uiLog(`Flor: Eq ${florTeams[0]} cobra 3 pts.`, 'points');
+        uiLog(`Flor: ${teamName(florTeams[0])} cobra 3 pts.`, 'points');
       } else if (florTeams.length === 2) {
         const winner = teamFlorScores[0] > teamFlorScores[1] ? 0 :
                        teamFlorScores[1] > teamFlorScores[0] ? 1 : teamOf(G.manoSeat);
         G.handScore[winner] += 3;
-        uiLog(`Flor: Eq ${winner} cobra 3 pts.`, 'points');
+        uiLog(`Flor: ${teamName(winner)} cobra 3 pts.`, 'points');
       }
     }
   }
@@ -1315,6 +1341,8 @@ function animateDeal(onDone) {
   }
   if (runtime.showScreen) runtime.showScreen('screen-game');
   if (runtime.renderGame) runtime.renderGame();
+  // Clear envido metrics immediately – they'll reappear after the deal animation completes
+  { const _ie = document.getElementById && document.getElementById('envido-info'); if (_ie) _ie.innerHTML = ''; }
 
   const overlay = document.createElement('div');
   overlay.className = 'new-hand-overlay';
@@ -1453,6 +1481,13 @@ export function serverStartNextHand() {
 
 export function getOppSeat(seat) {
   return allSeats().find(s => teamOf(s) !== teamOf(seat)) ?? (1 - seat);
+}
+
+// Returns a readable team label using player names (2-player) or "Eq 0/1" fallback
+export function teamName(team) {
+  if (!G || G.tableSize !== 2) return `Eq ${team}`;
+  const p = G.players.find(pl => pl.team === team);
+  return p ? p.name : `Eq ${team}`;
 }
 
 

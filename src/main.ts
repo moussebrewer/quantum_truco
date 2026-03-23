@@ -59,7 +59,7 @@ const APP_HTML = `<!-- ═══════════════════
 <!-- ══════════════════════════════════════════════════════════ -->
 <div id="screen-setup" class="screen active">
   <h1 class="setup-title">QUANTUM ⊗ TRUCO</h1>
-  <div class="setup-version">v0.1.1</div>
+  <div class="setup-version">v0.2</div>
   <div class="setup-card">
     <div class="setup-row">
       <span class="setup-label">Modo</span>
@@ -93,6 +93,14 @@ const APP_HTML = `<!-- ═══════════════════
       <span class="setup-label">Con Flor</span>
       <button class="toggle-btn" id="btn-flor" onclick="toggleFlor()">NO</button>
     </div>
+    <div class="setup-divider" id="names-divider"></div>
+    <div class="setup-row" id="names-row">
+      <span class="setup-label">Nombres</span>
+      <div class="player-names-inputs">
+        <input id="player-name-0" class="player-name-input" maxlength="20" placeholder="Jugador 1" />
+        <input id="player-name-1" class="player-name-input" maxlength="20" placeholder="Jugador 2" />
+      </div>
+    </div>
     <div class="setup-divider" id="online-divider" style="display:none"></div>
     <div class="online-room-panel" id="online-room-panel" style="display:none">
       <div class="setup-row">
@@ -109,11 +117,6 @@ const APP_HTML = `<!-- ═══════════════════
         </div>
       </div>
       <div class="online-status" id="online-status">Elegí crear una sala o ingresá un código para unirte.</div>
-    </div>
-    <div class="setup-divider"></div>
-    <div class="setup-row">
-      <span class="setup-label">Tu nombre</span>
-      <input id="player-name-input" class="player-name-input" maxlength="18" placeholder="Jugador 1" autocomplete="off" />
     </div>
     <button class="start-btn" id="btn-start-game" onclick="startGame()">COMENZAR PARTIDA →</button>
   </div>
@@ -139,12 +142,12 @@ const APP_HTML = `<!-- ═══════════════════
   <div class="game-header">
     <div class="score-display">
       <div class="score-team">
-        <div class="score-team-name t0">Eq A</div>
+        <div class="score-team-name t0">vos</div>
         <div class="score-pts-wrap" id="score-tally-0"></div>
       </div>
       <div class="score-sep">vs</div>
       <div class="score-team">
-        <div class="score-team-name t1">Eq B</div>
+        <div class="score-team-name t1">ellos</div>
         <div class="score-pts-wrap" id="score-tally-1"></div>
       </div>
     </div>
@@ -281,6 +284,27 @@ declare global {
 
 mountApp();
 initSetupOptions();
+
+// Wire player name inputs to setupCfg
+function wireNameInputs() {
+  const n0 = document.getElementById('player-name-0') as HTMLInputElement | null;
+  const n1 = document.getElementById('player-name-1') as HTMLInputElement | null;
+  if (n0) n0.addEventListener('input', () => { setupCfg.playerNames[0] = n0.value; });
+  if (n1) n1.addEventListener('input', () => { setupCfg.playerNames[1] = n1.value; });
+}
+wireNameInputs();
+
+// Show/hide name inputs based on selected mode
+document.addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement).closest?.('.opt-btn[data-group="mode"]') as HTMLElement | null;
+  if (!btn) return;
+  const mode = btn.dataset.val || '';
+  const namesRow = document.getElementById('names-row');
+  const namesDivider = document.getElementById('names-divider');
+  const isHuman2p = (mode === 'human');
+  if (namesRow) namesRow.style.display = isHuman2p ? '' : 'none';
+  if (namesDivider) namesDivider.style.display = isHuman2p ? '' : 'none';
+});
 
 configureGameRuntime({
   renderGame,

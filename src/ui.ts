@@ -130,18 +130,6 @@ export function initSetupOptions() {
   });
 
   updateSetupModeUi(setupCfg.mode);
-
-  // Player name input
-  const nameInput = document.getElementById('player-name-input') as HTMLInputElement | null;
-  if (nameInput) {
-    const saved = localStorage.getItem('qt-player-name');
-    if (saved) { nameInput.value = saved; setupCfg.playerName = saved; }
-    nameInput.addEventListener('input', () => {
-      const v = nameInput.value.trim() || 'Jugador 1';
-      setupCfg.playerName = v;
-      localStorage.setItem('qt-player-name', v);
-    });
-  }
 }
 
 
@@ -677,16 +665,14 @@ function dispatchGoToMazo() {
     return;
   }
   // Online: show local confirmation modal, then send to server on confirm
-  const viewerSeat  = G.viewerSeat ?? 0;
-  const viewerTeam  = G.players[viewerSeat]?.team ?? 0;
-  const oppTeam     = 1 - viewerTeam;
-  const betLevel    = G.bet?.level ?? 0;
-  const pts         = [1, 2, 3, 4][betLevel] ?? 1;
-  const p           = G.players[viewerSeat];
-  const oppName     = G.players.find(pl => pl.team === oppTeam)?.name || `Eq ${oppTeam}`;
+  const oppTeam = 1 - (G.players[G.viewerSeat]?.team ?? 0);
+  const pts     = (G.bet?.level >= 0 && G.bet?.level <= 3)
+    ? [1, 2, 3, 4][G.bet.level]
+    : 1;
+  const p = G.players[G.viewerSeat];
   showModal('danger',
     `${p?.name || 'Vos'} se va al Mazo`,
-    `<strong>${oppName}</strong> cobra <strong>${pts} pts</strong> de Truco.`,
+    `Eq ${oppTeam} cobra <strong>${pts} pts</strong> de Truco.`,
     pts,
     [
       { label: 'Confirmar', cls: 'danger', cb: () => { closeModal(); sendGoToMazo(); }},
@@ -711,20 +697,15 @@ function updateHeader() {
   const { scores, target, handNum, bet } = G;
   renderTally('score-tally-0', scores[0], 0);
   renderTally('score-tally-1', scores[1], 1);
-
-  // Dynamic team names: viewer is "Vos", opponent is their name
+  // Update team name labels using actual player names
   const viewerSeat = getViewerSeatForRender();
-  const viewerTeam = G.players[viewerSeat]?.team ?? 0;
-  const oppTeam    = 1 - viewerTeam;
-  const myName     = G.players[viewerSeat]?.name || 'Vos';
-  const oppPlayers = G.players.filter(p => p.team === oppTeam);
-  const oppName    = oppPlayers.length === 1 ? oppPlayers[0].name : 'Ellos';
-
-  const nameT0 = document.querySelector('.score-team-name.t0');
-  const nameT1 = document.querySelector('.score-team-name.t1');
-  if (nameT0) nameT0.textContent = viewerTeam === 0 ? myName : oppName;
-  if (nameT1) nameT1.textContent = viewerTeam === 1 ? myName : oppName;
-
+  const t0nameEl = document.querySelector('.score-team-name.t0');
+  const t1nameEl = document.querySelector('.score-team-name.t1');
+  if (t0nameEl && G.tableSize === 2) {
+    // team 0 = seat 0, team 1 = seat 1
+    t0nameEl.textContent = G.players[0]?.name || 'vos';
+    if (t1nameEl) t1nameEl.textContent = G.players[1]?.name || 'ellos';
+  }
   document.getElementById('hdr-round').textContent = `Mano ${handNum} · Baza ${G.trickIdx+1}`;
   const lvl = TRUCO_LEVELS[bet.level];
   document.getElementById('hdr-bet').textContent = `Truco: ${lvl.name} (${lvl.pts} pt${lvl.pts>1?'s':''})`;
@@ -772,7 +753,14 @@ export function renderArena() {
   // Opponent deck indicator (left side of arena)
   renderOpponentIndicator();
 
-  G.playOrder.forEach(seat => {
+  // Vertical layout: render opponent's card first (top), viewer's card last (bottom)
+  const _viewerSeatArena = getViewerSeatForRender();
+  const _renderOrder = [...G.playOrder].sort((a, b) => {
+    if (a === _viewerSeatArena) return 1;   // viewer goes last (bottom)
+    if (b === _viewerSeatArena) return -1;
+    return 0;
+  });
+  _renderOrder.forEach(seat => {
     const qc = G.playsThisTrick[seat];
     if (!qc) return;
     const slot = document.createElement('div');
@@ -794,7 +782,7 @@ export function renderArena() {
 
   if (G.phase === 'baza_end' || G.phase === 'hand_end') {
     const last = G.trickWinners[G.trickWinners.length - 1];
-    bazaEl.textContent = last === -1 ? '⚔ PARDA' : `▲ Gana Eq ${last === 0 ? 'A' : 'B'}`;
+    bazaEl.textContent = last === -1 ? '⚔ PARDA' : `▲ Gana ${last === 0 ? 'vos' : 'ellos'}`;
     bazaEl.style.color = last === -1 ? 'var(--gold)' : last === 0 ? 'var(--accent-a)' : 'var(--accent-b)';
     // Highlight winner's card slot
     const slots = document.querySelectorAll('#arena-slots .arena-slot');
@@ -911,9 +899,6 @@ export function renderHand() {
 }
 
 function renderEnvidoInfo(p, el) {
-  // Don't show metrics when hand-row is empty (deal animation in progress)
-  const handRow = document.getElementById('hand-row');
-  if (!handRow || handRow.children.length === 0) { el.innerHTML = ''; return; }
   const liveHand = p.hand.map(qc => {
     const visibleCard = getVisibleCard(qc);
     return visibleCard
@@ -921,8 +906,6 @@ function renderEnvidoInfo(p, el) {
       : qc;
   });
   const lm = envidoMetric(liveHand);
-  // Sanity check — if metrics look infinite/NaN don't show
-  if (!isFinite(lm.mu) || isNaN(lm.mu)) { el.innerHTML = ''; return; }
   let html = `
     <div class="envido-stat"><span class="envido-stat-label">Envido μ</span><span class="envido-stat-val">${lm.mu.toFixed(1)}</span></div>
     <div class="envido-stat"><span class="envido-stat-label">P(≥28)</span><span class="envido-stat-val">${(lm.p28*100).toFixed(0)}%</span></div>
@@ -975,7 +958,7 @@ function renderHistoryPanel() {
     const wlbl = document.createElement('div');
     wlbl.className = 'history-winner';
     if (winner === -1) { wlbl.textContent = '⚔ Parda'; wlbl.style.color = 'var(--gold)'; }
-    else { wlbl.textContent = `▲ Eq ${winner===0?'A':'B'}`; wlbl.style.color = winner===0?'var(--accent-a)':'var(--accent-b)'; }
+    else { wlbl.textContent = `▲ ${winner===0?'vos':'ellos'}`; wlbl.style.color = winner===0?'var(--accent-a)':'var(--accent-b)'; }
     baza.appendChild(wlbl);
     list.appendChild(baza);
   });
@@ -1056,7 +1039,7 @@ function renderActionPanel() {
 
   } else if (G.phase === 'baza_end') {
     const last = G.trickWinners[G.trickWinners.length - 1];
-    turnLbl.textContent = last === -1 ? '⚔ Parda' : `Eq ${last===0?'A':'B'} gana`;
+    turnLbl.textContent = last === -1 ? '⚔ Parda' : `${last===0?'vos':'ellos'} gana`;
     if (!G.onlineMode && canTeamRaiseNow(bet, actTeam)) {
       const nxt = TRUCO_LEVELS[bet.level + 1];
       if (nxt) addBtn(btns, `${nxt.name} (${nxt.pts}p)`, 'gold', dispatchSingTruco);
