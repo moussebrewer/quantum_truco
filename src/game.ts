@@ -32,6 +32,7 @@ const runtime = {
   aiHandlePendingChant: null,
   aiRecordHand: null,
   resetAIState: null,
+  resetAITurn: null,   // lightweight: clears pending without wiping model
 };
 
 let headlessMode = false;
@@ -519,6 +520,7 @@ export function startGame() {
   G = createBaseState(setupCfg);
   G.aiMode = setupCfg.mode;
   G.aiSeat = (setupCfg.mode !== 'human') ? 1 : null;
+  G.aiThinking = false;
   if (G.aiSeat !== null) {
     G.players[G.aiSeat].name = setupCfg.mode === "ai_legend" ? "🃑 El Duende" : setupCfg.mode === "ai_expert" ? "🧉 Gaucho" : setupCfg.mode === "ai_hard" ? "🎩 Citadino" : "🃏 El Pibe";
   }
@@ -1045,6 +1047,7 @@ function resolveTrick() {
       const handOver = w0 >= 2 || w1 >= 2 || G.trickWinners.length >= 3
         || (nPardas >= 1 && (w0 >= 1 || w1 >= 1));
       G.phase = handOver ? 'hand_end' : 'baza_end';
+      if (handOver) { G.aiThinking = false; if (runtime.resetAITurn) runtime.resetAITurn(); }
       if (runtime.renderGame) runtime.renderGame();
       if (!handOver) {
         setTimeout(() => {
@@ -1141,6 +1144,8 @@ function nextTrick() {
 // finalizeHand: called when hand ends due to mazo/reject (no trick resolution needed)
 function finalizeHand() {
   clearChantPending();
+  G.aiThinking = false;
+  if (runtime.resetAITurn) runtime.resetAITurn();
   settleChants(false); // don't re-add truco points (already added)
   applyHandScore();
 }
@@ -1148,6 +1153,8 @@ function finalizeHand() {
 // Called from renderActionBar "Nueva Mano" when phase===hand_end
 export function startNewHand() {
   if (G.phase === 'hand_end') {
+    G.aiThinking = false;
+    if (runtime.resetAITurn) runtime.resetAITurn();
     settleChants(true); // settle envido + flor; truco already settled in resolveTrick path
     applyHandScore();
   }
@@ -1280,6 +1287,9 @@ function dealNewHand() {
   G.playOrderIdx = 0;
   G.activeSeat   = G.playOrder[0];
   G.phase        = 'chant';
+  G.aiThinking   = false;
+  // Invalidate any stale AI timeouts from the previous hand
+  if (runtime.resetAITurn) runtime.resetAITurn();
 
   // Show new hand announcement then animate the deal
   animateDeal(() => passTo(G.activeSeat));

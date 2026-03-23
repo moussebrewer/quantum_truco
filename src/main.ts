@@ -51,6 +51,7 @@ import {
   aiHandlePendingChant,
   aiRecordHand,
   resetAIState,
+  resetAITurn,
 } from './ai';
 
 const APP_HTML = `<!-- ══════════════════════════════════════════════════════════ -->
@@ -302,6 +303,7 @@ configureGameRuntime({
   aiHandlePendingChant,
   aiRecordHand,
   resetAIState,
+  resetAITurn,
 });
 
 bootstrapOnlineUi();

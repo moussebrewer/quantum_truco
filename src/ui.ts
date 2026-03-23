@@ -965,6 +965,14 @@ function renderActionPanel() {
   } else if (G.phase === 'hand_end') {
     turnLbl.textContent = `+${G.handScore[0]} / +${G.handScore[1]}`;
     if (!G.onlineMode) addBtn(btns, 'Nueva Mano →', 'primary', startNewHand);
+    // In AI mode: auto-advance after 2.5 s so the human doesn't have to click
+    if (G.aiSeat !== null && !G.onlineMode && !G._autoNewHandScheduled) {
+      G._autoNewHandScheduled = true;
+      setTimeout(() => {
+        G._autoNewHandScheduled = false;
+        if (G && G.phase === 'hand_end') startNewHand();
+      }, 2500);
+    }
   }
 }
 

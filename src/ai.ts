@@ -1,6 +1,8 @@
 // @ts-nocheck
-// Refactor of the original single-file Quantum Truco source.
-// This file owns all AI state and decisions.
+// AI engine — calibrated v2
+// Pibe / Citadino / Gaucho Digital / El Duende
+// Power dist: p25=6.5, p50=7.0, p75=9.0, p90=10.0
+// Envido mu:  p25=14.5, p50=16.5, p75=19.8, p90=22.9
 
 import {
   G,
@@ -22,10 +24,14 @@ import {
   envidoScore,
 } from './game';
 
+// ── Scheduling ───────────────────────────────────────────────────
+
 let _aiTurnToken = 0;
-let _aiPending = false;
+let _aiPending   = false;
+
 export function aiNewToken() { return ++_aiTurnToken; }
 export function aiValidToken(t) { return G && t === _aiTurnToken; }
+
 export function aiSchedule(fn, delay) {
   if (_aiPending) return;
   _aiPending = true;
@@ -37,6 +43,7 @@ export function aiSchedule(fn, delay) {
     fn();
   }, delay);
 }
+
 export function aiThink() { return 750 + Math.random() * 450; }
 
 export function aiResume() {
@@ -62,86 +69,72 @@ export function aiTakeTurn() {
     return;
   }
   if (G.activeSeat !== G.aiSeat) { if (G) G.aiThinking = false; return; }
-  if (G.phase === 'collapsing' || G.phase === 'baza_end' || G.phase === 'hand_end') { G.aiThinking = false; return; }
+  if (G.phase === 'collapsing' || G.phase === 'baza_end' || G.phase === 'hand_end') {
+    G.aiThinking = false; return;
+  }
   const diff = aiGetDiff();
   if      (G.phase === 'chant') aiChantTurn(diff);
   else if (G.phase === 'play')  aiPlayTurn(diff);
   else G.aiThinking = false;
 }
 
-// ── Bluff detection (gaucho digital) ────────────────────────────
-// Tracks opponent betting patterns to estimate bluff probability.
-// _humanBluffHistory: array of {calledAt: bet.level, hadPower: bool}
-// We infer "had power" based on whether they won the baza they sang on.
+// ── Bluff history (Gaucho + Duende) ──────────────────────────────
 
-let _humanBluffHistory = [];   // {calledTruco: bool, calledEnvido: bool, bazaLost: bool}[]
-let _humanEnvidoHistory = [];  // {called: bool, envidoScore: number|null}[]
-let _humanTrucoHistory  = [];  // {called: bool, bazaPower: 'high'|'mid'|'low'|null}[]
+let _humanBluffHistory  = [];
+let _humanEnvidoHistory = [];
+let _humanTrucoHistory  = [];
 
-// Called at end of each hand to record human behavior
 export function aiRecordHand() {
   if (!G || G.aiSeat === null) return;
   if (G.aiMode === 'ai_legend') legendUpdateModel();
+
   const humanSeat = 1 - G.aiSeat;
   const humanTeam = teamOf(humanSeat);
-  const aiTeam    = teamOf(G.aiSeat);
 
-  // Did human sing truco? Did they win the hand?
   const humanSangTruco  = G.bet.level > 0 && G.bet.lastRaiserTeam === humanTeam;
   const humanSangEnvido = G.chant.envido.callerTeam === humanTeam;
-  const aiWonTricks     = G.trickWinners.filter(w => w === aiTeam).length;
   const humanLostBaza1  = G.trickWinners[0] !== undefined && G.trickWinners[0] !== humanTeam;
 
-  if (humanSangTruco) {
+  if (humanSangTruco)
     _humanTrucoHistory.push({ called: true, bazaLost: humanLostBaza1 });
-  }
-  if (humanSangEnvido && G.chant.envido.resolved) {
+  if (humanSangEnvido && G.chant.envido.resolved)
     _humanEnvidoHistory.push({ called: true, accepted: G.chant.envido.accepted });
-  }
 
-  // Keep only last 8 hands
-  if (_humanTrucoHistory.length > 8)  _humanTrucoHistory.shift();
+  if (_humanTrucoHistory.length  > 8) _humanTrucoHistory.shift();
   if (_humanEnvidoHistory.length > 8) _humanEnvidoHistory.shift();
 }
 
-// Returns 0..1 — how likely is it that the human is bluffing right now?
-// Higher = more likely bluff.
 function aiEstimateBluffProb(type) {
   if (type === 'truco') {
-    if (_humanTrucoHistory.length < 2) return 0.20; // not enough data, assume some bluff
-    // Bluff proxy: they sang truco but lost the first baza
-    const bluffLike = _humanTrucoHistory.filter(h => h.bazaLost).length;
-    return bluffLike / _humanTrucoHistory.length;
+    if (_humanTrucoHistory.length < 2) return 0.20;
+    return _humanTrucoHistory.filter(h => h.bazaLost).length / _humanTrucoHistory.length;
   }
   if (type === 'envido') {
     if (_humanEnvidoHistory.length < 2) return 0.15;
-    // Bluff proxy: they sang envido but rejected (didn't reveal high score)
-    const suspicious = _humanEnvidoHistory.filter(h => h.called && !h.accepted).length;
-    return suspicious / _humanEnvidoHistory.length;
+    return _humanEnvidoHistory.filter(h => h.called && !h.accepted).length / _humanEnvidoHistory.length;
   }
   return 0.20;
 }
 
-// Should gaucho bluff right now? Returns true with calibrated probability.
-// Conditions: only bluff if hand state makes it credible.
+// ── Bluff helpers ─────────────────────────────────────────────────
+
 function aiShouldBluffTruco(hand, tw, tl) {
-  const pows = hand.filter(qc=>qc&&qc.options).map(qc=>aiExpectedPower(qc));
+  const pows   = hand.filter(qc => qc && qc.options).map(qc => aiExpectedPower(qc));
   const maxPow = pows.length ? Math.max(...pows) : 0;
-  // Only bluff if: we're behind or mid-game, and hand is mediocre (bluffing with great hand = no bluff)
-  if (maxPow >= 11) return false; // real hand, not a bluff
-  if (tl >= 1 && tw === 0 && maxPow >= 6) return Math.random() < 0.40; // behind, credible bluff
-  if (tl === 0 && tw === 0 && maxPow >= 5) return Math.random() < 0.22; // opening bluff
+  if (maxPow >= 10) return false;
+  if (maxPow < 5.0) return false;
+  if (tl >= 1 && tw === 0 && maxPow >= 6.0) return Math.random() < 0.22;
+  if (tl === 0 && tw === 0 && maxPow >= 7.0) return Math.random() < 0.08;
   return false;
 }
 
 function aiShouldBluffEnvido(metric) {
-  // Bluff envido only with mediocre hand (if great, it's not a bluff)
-  if (metric.mu >= 24) return false;
-  if (metric.mu >= 15) return Math.random() < 0.28;
-  return false;
+  if (metric.mu >= 20) return false;
+  if (metric.mu >= 15) return Math.random() < 0.18;
+  return Math.random() < 0.08;
 }
 
-// ── Respond to pending chants ────────────────────────────────────
+// ── Respond to pending chants ─────────────────────────────────────
 
 export function aiHandlePendingChant() {
   G.aiThinking = false;
@@ -151,55 +144,63 @@ export function aiHandlePendingChant() {
   const diff = aiGetDiff();
 
   if (pc.type === 'truco') {
-    const { level, raiserTeam } = pc.data;
-    const nxt    = TRUCO_LEVELS[level];
-    const p      = G.players[G.aiSeat];
-    const maxPow = Math.max(...p.hand.filter(qc=>qc&&qc.options).map(qc=>aiExpectedPower(qc)), 0);
-    const roll   = Math.random();
-    const tw     = G.trickWinners.filter(w=>w===p.team).length;
-    const tl     = G.trickWinners.filter(w=>w!==p.team&&w!==-1).length;
-    let accept;
+    const { level } = pc.data;
+    const nxt  = TRUCO_LEVELS[level];
+    const p    = G.players[G.aiSeat];
+    const roll = Math.random();
+    const tw   = G.trickWinners.filter(w => w === p.team).length;
+    const tl   = G.trickWinners.filter(w => w !== p.team && w !== -1).length;
 
     if (diff === 'legend') {
-      // Full expected-utility decision tree
-      const dec = legendTrucoDecision(level, p.hand);
+      const dec = legendTrucoDecision(level, p.hand, true);
       if (dec === 'raise' && level < 3 && TRUCO_LEVELS[level + 1]) {
         uiLog(`[IA] Duende sube a ${TRUCO_LEVELS[level+1].name}`, 'important');
-        raiseTruco();
-        return;
+        raiseTruco(); return;
       }
-      accept = (dec === 'accept');
+      const accept = dec !== 'reject';
       uiLog(`[IA] Duende ${accept ? 'acepta' : 'rechaza'} ${nxt.name}`, 'important');
-      respondTruco(accept);
-      return;
-    }
-    if (diff === 'medium') {
-      accept = maxPow >= 10 || (maxPow >= 7 && roll < 0.60) || roll < 0.10;
-    } else if (diff === 'hard') {
-      accept = maxPow >= 11 || (maxPow >= 8 && tw >= 1) || (maxPow >= 9 && roll < 0.65) || roll < 0.08;
-    } else {
-      // expert: factor in bluff probability of the caller
-      const bluffP = aiEstimateBluffProb('truco');
-      const threshold = 9 - bluffP * 3;
-      accept = maxPow >= threshold || (maxPow >= threshold - 2 && tw >= 1) || roll < 0.06;
+      respondTruco(accept); return;
     }
 
-    // Raise instead of flat accept/reject?
-    if (level < 3 && TRUCO_LEVELS[level + 1]) {
-      const raiseThreshold = diff === 'expert' ? 0.35 : diff === 'hard' ? 0.40 : 0.50;
-      if (!accept && aiDecideSingTruco(p.hand, diff) && roll < raiseThreshold) {
+    const pWinHand = aiEstimateHandWinProb(p.hand, tw, tl);
+    const aiTeam   = p.team;
+    const oppScore = G.scores[1 - aiTeam];
+    const nxtPts   = nxt.pts;
+    const rejPts   = TRUCO_LEVELS[level - 1].pts;
+    const loseEndsGame     = (oppScore + nxtPts) >= G.target;
+    const losePutsOppClose = (oppScore + nxtPts) >= G.target - 2;
+    const rejectEndsGame   = (oppScore + rejPts) >= G.target;
+
+    const breakEven  = (nxtPts - rejPts) / (2 * nxtPts);
+    const safetyBase = diff === 'medium' ? 0.22 : diff === 'hard' ? 0.14 : 0.08;
+    const levelScale = [0, 1.0, 1.3, 1.7][level] || 1.0;
+    const trickBonus = tw >= 1 ? 0.6 : tl >= 1 ? 1.2 : 1.0;
+    const scoreMult  = loseEndsGame ? 1.8 : losePutsOppClose ? 1.3 : 1.0;
+    const bluffDisc  = diff === 'expert' ? aiEstimateBluffProb('truco') * 0.15 : 0;
+    const threshold  = Math.max(0.10, breakEven + safetyBase * levelScale * trickBonus * scoreMult - bluffDisc);
+
+    if (loseEndsGame && pWinHand < 0.38 && !rejectEndsGame) {
+      uiLog(`[IA] Rechaza ${nxt.name} — riesgo de cierre`, 'important');
+      respondTruco(false); return;
+    }
+
+    let accept = pWinHand >= threshold || roll < (diff === 'medium' ? 0.04 : 0.06);
+
+    if (accept && level < 3 && TRUCO_LEVELS[level + 1]) {
+      const bluffP    = diff === 'expert' ? aiEstimateBluffProb('truco') : 0;
+      const raiseProb = diff === 'expert' ? Math.min(0.20, 0.08 + bluffP * 0.24)
+                      : diff === 'hard'   ? 0.09 : 0.04;
+      if (pWinHand >= 0.62 && roll < raiseProb) {
         uiLog(`[IA] Sube a ${TRUCO_LEVELS[level+1].name}`, 'important');
-        raiseTruco();
-        return;
+        raiseTruco(); return;
       }
-      if (diff === 'expert' && !accept && aiEstimateBluffProb('truco') > 0.45 && roll < 0.50 && level < 3) {
-        uiLog(`[IA] Contra-bluff: sube a ${TRUCO_LEVELS[level+1].name}`, 'important');
-        raiseTruco();
-        return;
+      if (diff === 'expert' && bluffP > 0.45 && pWinHand >= 0.48 && roll < 0.16) {
+        uiLog(`[IA] Contra-bluff a ${TRUCO_LEVELS[level+1].name}`, 'important');
+        raiseTruco(); return;
       }
     }
 
-    uiLog(`[IA] ${accept ? 'Acepta' : 'Rechaza'} ${nxt.name}`, 'important');
+    uiLog(`[IA] ${accept ? 'Acepta' : 'Rechaza'} ${nxt.name} (p=${pWinHand.toFixed(2)} thr=${threshold.toFixed(2)})`, 'important');
     respondTruco(accept);
 
   } else if (pc.type === 'envido') {
@@ -210,36 +211,34 @@ export function aiHandlePendingChant() {
     let decision = 'reject';
 
     if (diff === 'legend') {
-      const pWin = legendEnvidoWinProb(metric);
+      const pWin     = legendEnvidoWinProb(metric);
       const foldRate = _opModel.folds / Math.max(_opModel.handsPlayed, 1);
-      // Lower calling bar if opponent folds often
-      const callBar = Math.max(0.38, 0.52 - foldRate * 0.20);
+      const callBar  = Math.max(0.30, 0.36 - foldRate * 0.12);
       if (pWin >= callBar) {
-        // Raise aggressively if we likely win and opponent has been aggressive
-        if (pWin >= 0.72 && raises.length && roll < 0.70) decision = raises[raises.length - 1];
-        else if (pWin >= 0.58 && raises.length && roll < 0.45) decision = raises[0];
+        if (pWin >= 0.54 && raises.length && roll < 0.40) decision = raises[0];
         else decision = 'accept';
       }
       uiLog(`[IA] Duende envido: ${decision} (pWin=${pWin.toFixed(2)})`, 'important');
-      respondEnvido(decision);
-      return;
+      respondEnvido(decision); return;
     }
+
     if (diff === 'medium') {
-      if (metric.mu >= 25)      decision = (metric.mu >= 28 && roll < 0.45 && raises.length) ? raises[0] : 'accept';
-      else if (metric.mu >= 21) decision = roll < 0.55 ? 'accept' : 'reject';
+      if (metric.mu >= 21)      decision = (metric.mu >= 25 && roll < 0.42 && raises.length) ? raises[0] : 'accept';
+      else if (metric.mu >= 17) decision = roll < 0.62 ? 'accept' : 'reject';
+      else if (metric.mu >= 13) decision = roll < 0.30 ? 'accept' : 'reject';
       else                      decision = roll < 0.12 ? 'accept' : 'reject';
     } else if (diff === 'hard') {
       const pWin = aiEstimateEnvidoWinProb(metric);
-      if (pWin >= 0.52) decision = (pWin >= 0.68 && roll < 0.45 && raises.length) ? raises[0] : 'accept';
+      if (pWin >= 0.36)     decision = (pWin >= 0.48 && roll < 0.40 && raises.length) ? raises[0] : 'accept';
+      else if (roll < 0.15) decision = 'accept';
     } else {
-      // expert: factor in human bluff tendency for envido
-      const bluffP   = aiEstimateBluffProb('envido');
-      const pWin     = aiEstimateEnvidoWinProb(metric);
-      const callBar  = 0.50 - bluffP * 0.15;
+      const bluffP  = aiEstimateBluffProb('envido');
+      const pWin    = aiEstimateEnvidoWinProb(metric);
+      const callBar = Math.max(0.30, 0.36 - bluffP * 0.12);
       if (pWin >= callBar) {
-        decision = (pWin >= 0.70 && raises.length && roll < 0.55) ? raises[0] : 'accept';
+        decision = (pWin >= 0.48 && raises.length && roll < 0.38) ? raises[0] : 'accept';
       }
-      if (decision === 'accept' && bluffP > 0.40 && metric.mu >= 22 && raises.length && roll < 0.45) {
+      if (decision === 'accept' && bluffP > 0.42 && raises.length && roll < 0.25) {
         decision = raises[raises.length - 1];
       }
     }
@@ -250,55 +249,48 @@ export function aiHandlePendingChant() {
   } else if (pc.type === 'flor') {
     const { stage } = pc.data;
     if (stage === 'initial') {
-      const hasFlorChance = G.players[G.aiSeat].florMetric.pFlor > 0;
-      uiLog(`[IA] Flor: ${hasFlorChance ? 'Sí' : 'No'}`, 'important');
-      respondFlor(hasFlorChance ? 'yes' : 'no');
+      respondFlor(G.players[G.aiSeat].florMetric.pFlor > 0 ? 'yes' : 'no');
     } else if (stage === 'contraflor') {
-      // Expert is more aggressive with contraflor
-      const roll = Math.random();
-      const threshold = diff === 'legend' ? 0.70 : diff === 'expert' ? 0.50 : diff === 'hard' ? 0.30 : 0.20;
-      const action = roll < threshold ? 'contraflor' : 'simple';
-      uiLog(`[IA] Contraflor: ${action}`, 'important');
-      respondFlor(action);
+      const t = diff === 'legend' ? 0.55 : diff === 'expert' ? 0.40 : diff === 'hard' ? 0.28 : 0.18;
+      respondFlor(Math.random() < t ? 'contraflor' : 'simple');
     } else if (stage === 'resp_contraflor') {
       const florMu = G.players[G.aiSeat].florMetric.mu || 0;
-      const threshold = diff === 'legend' ? (florMu >= 25 ? 0.85 : 0.60)
-                        : diff === 'expert' ? (florMu >= 28 ? 0.70 : 0.40)
-                        : diff === 'hard' ? 0.45 : 0.35;
-      const action = Math.random() < threshold ? 'accept' : 'reject';
-      uiLog(`[IA] Resp contraflor: ${action}`, 'important');
-      respondFlor(action);
+      const t = diff === 'legend' ? (florMu >= 22 ? 0.72 : 0.50)
+              : diff === 'expert' ? (florMu >= 25 ? 0.60 : 0.38)
+              : diff === 'hard'   ? 0.42 : 0.32;
+      respondFlor(Math.random() < t ? 'accept' : 'reject');
     }
   }
 }
 
-// ── Chant turn (AI takes initiative) ────────────────────────────
+// ── AI takes initiative ───────────────────────────────────────────
 
 function aiChantTurn(diff) {
   const p  = G.players[G.aiSeat];
   const tw = G.trickWinners.filter(w => w === p.team).length;
   const tl = G.trickWinners.filter(w => w !== p.team && w !== -1).length;
 
-  // 1. Envido (baza 0 only, no prior calls)
-  if (G.trickIdx === 0 && !G.chant.envido.resolved && !G.chant.florBlockedEnvido && G.chant.envido.calls.length === 0) {
-    const call = diff === 'legend' ? legendEnvidoCall(p.metric) : aiDecideEnvidoCall(p.metric, diff);
+  // 1. Envido
+  if (G.trickIdx === 0 && !G.chant.envido.resolved
+      && !G.chant.florBlockedEnvido && G.chant.envido.calls.length === 0) {
+    const call = diff === 'legend'
+      ? legendEnvidoCall(p.metric)
+      : aiDecideEnvidoCall(p.metric, diff);
     if (call) {
       uiLog(`[IA] Canta ${call}`, 'important');
       G.aiThinking = false;
-      initiateEnvido(call);
-      return;
+      initiateEnvido(call); return;
     }
   }
 
-  // 2. Truco (including expert bluff)
+  // 2. Truco
   if (canTeamRaiseNow(G.bet, p.team)) {
     const nxt = TRUCO_LEVELS[G.bet.level + 1];
     if (nxt) {
       let shouldSing;
       if (diff === 'legend') {
-        const dec = legendTrucoDecision(1, p.hand); // level 1 = initiating truco
-        shouldSing = (dec === 'accept' || dec === 'raise');
-      } else if (diff === 'expert') {
+        shouldSing = legendTrucoDecision(1, p.hand, false) !== 'reject';
+      } else if (diff === 'expert' || diff === 'hard') {
         shouldSing = aiDecideSingTruco(p.hand, diff) || aiShouldBluffTruco(p.hand, tw, tl);
       } else {
         shouldSing = aiDecideSingTruco(p.hand, diff);
@@ -306,13 +298,12 @@ function aiChantTurn(diff) {
       if (shouldSing) {
         uiLog(`[IA] Canta ${nxt.name}`, 'important');
         G.aiThinking = false;
-        singTruco();
-        return;
+        singTruco(); return;
       }
     }
   }
 
-  // 3. Nothing to sing → play
+  // 3. Play
   G.aiThinking = false;
   G.phase = 'play';
   aiPlayTurn(diff);
@@ -320,67 +311,57 @@ function aiChantTurn(diff) {
 
 function aiDecideEnvidoCall(metric, diff) {
   const r = Math.random();
-
   if (diff === 'medium') {
-    if (r < 0.15) return 'envido'; // occasional random bluff
-    if (metric.mu >= 28 || metric.p28 >= 0.65) return 'falta envido';
-    if (metric.mu >= 26 || metric.p28 >= 0.45) return 'real envido';
-    if (metric.mu >= 23) return 'envido';
+    if (metric.mu >= 25 || metric.p28 >= 0.55) return 'falta envido';
+    if (metric.mu >= 21 || metric.p28 >= 0.38) return 'real envido';
+    if (metric.mu >= 18) return 'envido';
+    if (r < 0.07) return 'envido';
     return null;
-
   } else if (diff === 'hard') {
     const pWin = aiEstimateEnvidoWinProb(metric);
-    if (pWin >= 0.80) return 'falta envido';
-    if (pWin >= 0.65) return 'real envido';
-    if (pWin >= 0.52 || (metric.mu >= 20 && r < 0.18)) return 'envido';
+    if (pWin >= 0.52) return metric.p28 >= 0.40 ? 'falta envido' : 'real envido';
+    if (pWin >= 0.40) return 'envido';
+    if (metric.mu >= 17 && r < 0.12) return 'envido';
     return null;
-
   } else {
-    // expert: sharp thresholds + calibrated bluff
     const pWin = aiEstimateEnvidoWinProb(metric);
-    if (pWin >= 0.78) return 'falta envido';
-    if (pWin >= 0.62) return 'real envido';
-    if (pWin >= 0.50) return 'envido';
-    // Strategic bluff envido: low-scoring hand, opponent hasn't called yet
-    if (aiShouldBluffEnvido(metric)) return 'envido';
+    if (pWin >= 0.52) return metric.p28 >= 0.38 ? 'falta envido' : 'real envido';
+    if (pWin >= 0.38) return 'envido';
+    if (aiShouldBluffEnvido(metric) && r < 0.50) return 'envido';
     return null;
   }
 }
 
 function aiDecideSingTruco(hand, diff) {
-  const pows = hand.filter(qc=>qc&&qc.options).map(qc=>aiExpectedPower(qc));
+  const pows   = hand.filter(qc => qc && qc.options).map(qc => aiExpectedPower(qc));
   if (!pows.length) return false;
   const maxPow = Math.max(...pows);
-  const r = Math.random();
-  const tw = G.trickWinners.filter(w => w === G.players[G.aiSeat].team).length;
-  const tl = G.trickWinners.filter(w => w !== G.players[G.aiSeat].team && w !== -1).length;
+  const r      = Math.random();
+  const tw     = G.trickWinners.filter(w => w === G.players[G.aiSeat].team).length;
+  const tl     = G.trickWinners.filter(w => w !== G.players[G.aiSeat].team && w !== -1).length;
 
   if (diff === 'medium') {
-    return maxPow >= 10 || (maxPow >= 8 && r < 0.55) || r < 0.12;
+    return maxPow >= 9.0 || (maxPow >= 7.5 && r < 0.38) || r < 0.05;
   } else if (diff === 'hard') {
-    return maxPow >= 11 || (maxPow >= 9 && tw >= 1) || (tl >= 1 && maxPow >= 7 && r < 0.35) || r < 0.08;
+    return maxPow >= 8.5 || (maxPow >= 7.5 && r < 0.50) || (tl >= 1 && maxPow >= 7.0 && r < 0.40) || r < 0.07;
   } else if (diff === 'expert') {
-    if (maxPow >= 12) return true;
-    if (maxPow >= 10 && tl === 0) return true;
-    if (maxPow >= 9  && tw >= 1)  return true;
-    if (tl >= 1 && maxPow >= 8)   return r < 0.25;
-    return r < 0.05;
+    if (maxPow >= 9.0)             return true;
+    if (maxPow >= 7.5)             return r < 0.65;
+    if (maxPow >= 7.0 && tw >= 1)  return r < 0.60;
+    if (tl >= 1 && maxPow >= 6.5)  return r < 0.45;
+    return r < 0.10;
   } else {
-    // legend: only called as fallback; main decision via legendTrucoDecision
-    if (maxPow >= 12) return true;
-    if (maxPow >= 10) return true;
-    return r < 0.03;
+    return maxPow >= 9.5 || r < 0.08;
   }
 }
 
-// ── Card play ────────────────────────────────────────────────────
+// ── Card play ─────────────────────────────────────────────────────
 
 function aiPlayTurn(diff) {
   const hand  = G.players[G.aiSeat].hand;
   const valid = hand.filter(qc => qc && qc.options && qc.options[0] && qc.options[1]);
   if (!valid.length) { G.aiThinking = false; return; }
 
-  // Sing truco before playing?
   if (canTeamRaiseNow(G.bet, G.players[G.aiSeat].team)) {
     const nxt = TRUCO_LEVELS[G.bet.level + 1];
     if (nxt) {
@@ -388,9 +369,8 @@ function aiPlayTurn(diff) {
       const tl = G.trickWinners.filter(w => w !== G.players[G.aiSeat].team && w !== -1).length;
       let shouldSing;
       if (diff === 'legend') {
-        const dec = legendTrucoDecision(1, valid);
-        shouldSing = (dec === 'accept' || dec === 'raise');
-      } else if (diff === 'expert') {
+        shouldSing = legendTrucoDecision(1, valid, false) !== 'reject';
+      } else if (diff === 'expert' || diff === 'hard') {
         shouldSing = aiDecideSingTruco(valid, diff) || aiShouldBluffTruco(valid, tw, tl);
       } else {
         shouldSing = aiDecideSingTruco(valid, diff);
@@ -398,8 +378,7 @@ function aiPlayTurn(diff) {
       if (shouldSing) {
         uiLog(`[IA] Canta ${nxt.name}`, 'important');
         G.aiThinking = false;
-        singTruco();
-        return;
+        singTruco(); return;
       }
     }
   }
@@ -418,61 +397,47 @@ function aiPlayTurn(diff) {
 function aiChooseCardMedium(valid, hand) {
   const tw     = G.trickWinners.filter(w => w === G.players[G.aiSeat].team).length;
   const tl     = G.trickWinners.filter(w => w !== G.players[G.aiSeat].team && w !== -1).length;
-  const sorted = valid.map(qc => ({qc, ep:aiExpectedPower(qc)})).sort((a,b)=>a.ep-b.ep);
+  const sorted = valid.map(qc => ({ qc, ep: aiExpectedPower(qc) })).sort((a, b) => a.ep - b.ep);
   let chosen;
-  if (G.trickIdx === 0)         chosen = sorted[Math.floor(sorted.length/2)].qc;
+  if (G.trickIdx === 0)         chosen = sorted[Math.floor(sorted.length / 2)].qc;
   else if (tw >= 1 && tl === 0) chosen = sorted[0].qc;
-  else if (tl >= 1 && tw === 0) chosen = sorted[sorted.length-1].qc;
-  else                          chosen = sorted[sorted.length-1].qc;
+  else                          chosen = sorted[sorted.length - 1].qc;
   return hand.indexOf(chosen);
 }
 
 function aiChooseCardHard(valid, hand) {
   const tw     = G.trickWinners.filter(w => w === G.players[G.aiSeat].team).length;
   const tl     = G.trickWinners.filter(w => w !== G.players[G.aiSeat].team && w !== -1).length;
-  const scored = valid.map(qc => ({qc, ep:aiExpectedPower(qc), pw:aiEstimateBazaWinProb(qc)}));
+  const scored = valid.map(qc => ({ qc, ep: aiExpectedPower(qc), pw: aiEstimateBazaWinProb(qc) }));
   let chosen;
   if (G.trickIdx === 0) {
-    chosen = scored.sort((a,b)=>Math.abs(a.pw-0.52)-Math.abs(b.pw-0.52))[0].qc;
+    chosen = scored.sort((a, b) => Math.abs(a.pw - 0.52) - Math.abs(b.pw - 0.52))[0].qc;
   } else if (tw >= 1 && tl === 0) {
-    const viable = scored.filter(s=>s.pw>=0.45).sort((a,b)=>a.ep-b.ep);
-    chosen = (viable.length ? viable[0] : scored.sort((a,b)=>a.ep-b.ep)[0]).qc;
+    const viable = scored.filter(s => s.pw >= 0.45).sort((a, b) => a.ep - b.ep);
+    chosen = (viable.length ? viable[0] : scored.sort((a, b) => a.ep - b.ep)[0]).qc;
   } else {
-    chosen = scored.sort((a,b)=>b.pw-a.pw)[0].qc;
+    chosen = scored.sort((a, b) => b.pw - a.pw)[0].qc;
   }
   return hand.indexOf(chosen);
 }
 
 function aiChooseCardExpert(valid, hand) {
-  // Expert strategy (200 samples Monte Carlo + game-state aware)
   const tw     = G.trickWinners.filter(w => w === G.players[G.aiSeat].team).length;
   const tl     = G.trickWinners.filter(w => w !== G.players[G.aiSeat].team && w !== -1).length;
-  const scored = valid.map(qc => ({
-    qc,
-    ep:  aiExpectedPower(qc),
-    pw:  aiEstimateBazaWinProb(qc, 200)
-  }));
-
+  const scored = valid.map(qc => ({ qc, ep: aiExpectedPower(qc), pw: aiEstimateBazaWinProb(qc, 200) }));
   let chosen;
-
   if (G.trickIdx === 0) {
-    // Baza 1: play closest to 50% — save best cards, don't expose
-    chosen = scored.sort((a,b)=>Math.abs(a.pw-0.50)-Math.abs(b.pw-0.50))[0].qc;
+    chosen = scored.sort((a, b) => Math.abs(a.pw - 0.50) - Math.abs(b.pw - 0.50))[0].qc;
   } else if (tw >= 2 || (tw === 1 && tl === 0)) {
-    // Winning — play cheapest card that still has >40% to take this baza
-    const viable = scored.filter(s=>s.pw>=0.40).sort((a,b)=>a.ep-b.ep);
-    chosen = (viable.length ? viable[0] : scored.sort((a,b)=>a.ep-b.ep)[0]).qc;
-  } else if (tl >= 1 && tw === 0) {
-    // Must win this baza — play strongest
-    chosen = scored.sort((a,b)=>b.pw-a.pw)[0].qc;
+    const viable = scored.filter(s => s.pw >= 0.40).sort((a, b) => a.ep - b.ep);
+    chosen = (viable.length ? viable[0] : scored.sort((a, b) => a.ep - b.ep)[0]).qc;
   } else {
-    // Tied (1-1 or 0-0 in baza 3): optimal win probability
-    chosen = scored.sort((a,b)=>b.pw-a.pw)[0].qc;
+    chosen = scored.sort((a, b) => b.pw - a.pw)[0].qc;
   }
   return hand.indexOf(chosen);
 }
 
-// ── Probability helpers ──────────────────────────────────────────
+// ── Probability helpers ───────────────────────────────────────────
 
 function aiExpectedPower(qc) {
   if (!qc || !qc.options || !qc.options[0] || !qc.options[1]) return 0;
@@ -483,274 +448,256 @@ function aiEstimateBazaWinProb(qc, samples = 80) {
   if (!qc || !qc.options) return 0.5;
   const myPow = aiExpectedPower(qc);
   let wins = 0;
-  for (let i=0; i<samples; i++) {
+  for (let i = 0; i < samples; i++) {
     const r = Math.random();
-    const o = r<0.40 ? 1+Math.floor(Math.random()*4) : r<0.75 ? 5+Math.floor(Math.random()*5) : 10+Math.floor(Math.random()*5);
+    const o = r < 0.40 ? 1 + Math.floor(Math.random() * 4)
+            : r < 0.75 ? 5 + Math.floor(Math.random() * 5)
+            :            10 + Math.floor(Math.random() * 5);
     wins += myPow > o ? 1 : myPow === o ? 0.5 : 0;
   }
   return wins / samples;
+}
+
+// Multi-baza hand win probability — accounts for trick state.
+function aiEstimateHandWinProb(hand, tw, tl) {
+  const validCards = hand.filter(qc => qc && qc.options);
+  if (!validCards.length) return 0.5;
+  const bazaProbs = validCards.map(qc => aiEstimateBazaWinProb(qc, 120));
+  const bestBaza  = Math.max(...bazaProbs);
+  const avgBaza   = bazaProbs.reduce((a, b) => a + b, 0) / bazaProbs.length;
+
+  if (tw >= 2) return 0.97;
+  if (tl >= 2) return 0.03;
+  if (tw === 1 && tl === 0) return 1 - Math.pow(1 - bestBaza, 2) * 0.85;
+  if (tw === 0 && tl === 1) return Math.pow(bestBaza, 2) * 1.05;
+  if (tw === 1 && tl === 1) return bestBaza;
+
+  const pWinFrom10 = 1 - Math.pow(1 - avgBaza, 2) * 0.85;
+  const pWinFrom01 = Math.pow(avgBaza, 2) * 1.05;
+  return bestBaza * pWinFrom10 + (1 - bestBaza) * pWinFrom01;
 }
 
 function aiEstimateEnvidoWinProb(metric) {
   const hand = G.players[G.aiSeat].hand.filter(qc => qc && qc.options);
   if (!hand.length) return 0.5;
   const worlds = enumerateWorlds(hand);
-  const myExp  = worlds.map(w=>envidoScore(w)).reduce((a,b)=>a+b,0) / worlds.length;
+  const myExp  = worlds.map(w => envidoScore(w)).reduce((a, b) => a + b, 0) / worlds.length;
   let wins = 0;
-  for (let i=0; i<200; i++) {
+  for (let i = 0; i < 200; i++) {
     const r = Math.random();
-    const o = r<0.35 ? 5+Math.floor(Math.random()*8) : r<0.65 ? 20+Math.floor(Math.random()*8) : 27+Math.floor(Math.random()*7);
+    const o = r < 0.35 ? 5 + Math.floor(Math.random() * 8)
+            : r < 0.65 ? 20 + Math.floor(Math.random() * 8)
+            :             27 + Math.floor(Math.random() * 7);
     wins += myExp > o ? 1 : myExp === o ? 0.5 : 0;
   }
   return wins / 200;
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// EL DUENDE — Bayesian opponent model + expected-utility tree
+// ═══════════════════════════════════════════════════════════════════
 
-// ═══════════════════════════════════════════════════════════════
-// EL DUENDE — nivel legendario
-// Modelo bayesiano de oponente + árbol de utilidad esperada
-// ═══════════════════════════════════════════════════════════════
-
-// Opponent model: prior on human hand strength, updated each hand.
-// Tracks:   { trucoBluffRate, envidoBluffRate, aggressionLevel,
-//             avgEnvidoMu, folds, calls, raises, handsPlayed }
 let _opModel = {
-  trucoBluffRate:  0.20,  // P(human sang truco | weak hand)
+  trucoBluffRate:  0.20,
   envidoBluffRate: 0.15,
-  aggressionLevel: 0.50,  // 0=passive, 1=hyper-aggressive
+  aggressionLevel: 0.50,
   avgEnvidoMu:     20,
   folds: 0, calls: 0, raises: 0, handsPlayed: 0,
-  envidoSamples: []        // [{sang, mu_est}] — built over time
+  envidoSamples: [],
 };
 
-// Called by aiRecordHand when diff===legend
 function legendUpdateModel() {
   if (!G || G.aiSeat === null) return;
-  const humanSeat = 1 - G.aiSeat;
-  const humanTeam = teamOf(humanSeat);
-
+  const humanTeam = teamOf(1 - G.aiSeat);
   _opModel.handsPlayed++;
 
-  // Aggression: how often did human initiate bets?
   const initiated = (G.bet.level > 0 && G.bet.lastRaiserTeam === humanTeam ? 1 : 0)
                   + (G.chant.envido.callerTeam === humanTeam ? 1 : 0);
   _opModel.aggressionLevel = _opModel.aggressionLevel * 0.85 + (initiated / 2) * 0.15;
 
-  // Truco bluff rate: sang truco, lost first baza = likely bluff
   if (G.bet.level > 0 && G.bet.lastRaiserTeam === humanTeam) {
     const bazaLost = G.trickWinners[0] !== undefined && G.trickWinners[0] !== humanTeam;
     _opModel.trucoBluffRate = _opModel.trucoBluffRate * 0.80 + (bazaLost ? 0.20 : 0);
   }
 
-  // Envido model: if envido resolved and we saw the score, update estimate
   if (G.chant.envido.resolved && G.chant.envido.callerTeam === humanTeam) {
-    // We don't directly see the score in state, but if they raised to falta it's high
-    const calls = G.chant.envido.calls || [];
-    const topCall = calls[calls.length - 1];
+    const calls    = G.chant.envido.calls || [];
+    const topCall  = calls[calls.length - 1];
     const impliedMu = topCall === 'falta envido' ? 29
-                    : topCall === 'real envido'  ? 25
-                    : topCall === 'envido'        ? 20 : 15;
+                    : topCall === 'real envido'   ? 25
+                    : topCall === 'envido'         ? 20 : 15;
     _opModel.avgEnvidoMu = _opModel.avgEnvidoMu * 0.75 + impliedMu * 0.25;
     _opModel.envidoSamples.push(impliedMu);
     if (_opModel.envidoSamples.length > 10) _opModel.envidoSamples.shift();
   }
 
-  // Fold rate for truco
   if (G.bet.level > 0) {
     const humanFolded = G.trickWinners.length < 3 && G.handScore[teamOf(G.aiSeat)] > 0;
     if (humanFolded) _opModel.folds++;
-    else _opModel.calls++;
+    else             _opModel.calls++;
   }
 }
 
-// Bayesian estimate of human's current envido score distribution
-// Returns {mean, sd} representing a Gaussian approximation
 function legendEstimateHumanEnvidoDist() {
   const samples = _opModel.envidoSamples;
   if (!samples.length) return { mean: _opModel.avgEnvidoMu, sd: 8 };
-  const mean = samples.reduce((a,b)=>a+b,0) / samples.length;
-  const variance = samples.map(x=>(x-mean)**2).reduce((a,b)=>a+b,0) / samples.length;
+  const mean     = samples.reduce((a, b) => a + b, 0) / samples.length;
+  const variance = samples.map(x => (x - mean) ** 2).reduce((a, b) => a + b, 0) / samples.length;
   return { mean, sd: Math.max(Math.sqrt(variance), 3) };
 }
 
-// Full MC envido win probability using bayesian opponent model
 function legendEnvidoWinProb(metric) {
   const hand = G.players[G.aiSeat].hand.filter(qc => qc && qc.options);
   if (!hand.length) return 0.5;
   const worlds = enumerateWorlds(hand);
-  const myExp  = worlds.map(w=>envidoScore(w)).reduce((a,b)=>a+b,0) / worlds.length;
+  const myExp  = worlds.map(w => envidoScore(w)).reduce((a, b) => a + b, 0) / worlds.length;
   const dist   = legendEstimateHumanEnvidoDist();
-  // Gaussian opponent model: N(dist.mean, dist.sd)
   let wins = 0;
-  for (let i=0; i<300; i++) {
-    // Box-Muller
+  for (let i = 0; i < 300; i++) {
     const u = Math.random(), v = Math.random();
-    const z = Math.sqrt(-2*Math.log(u+1e-9)) * Math.cos(2*Math.PI*v);
+    const z = Math.sqrt(-2 * Math.log(u + 1e-9)) * Math.cos(2 * Math.PI * v);
     const oScore = Math.max(0, Math.min(33, dist.mean + z * dist.sd));
     wins += myExp > oScore ? 1 : myExp === Math.round(oScore) ? 0.5 : 0;
   }
   return wins / 300;
 }
 
-// Full MC baza win prob using full quantum enumeration (not just expected power)
 function legendBazaWinProb(qc) {
   if (!qc || !qc.options) return 0.5;
-  const opts = qc.options;
-  // Average over both quantum options
-  const p0 = trucoPower(opts[0]);
-  const p1 = trucoPower(opts[1]);
-  let wins = 0;
-  // Opponent has 3 cards; their quantum cards also have 2 options each
-  // We sample uniformly from plausible opponent power distribution
-  for (let i=0; i<300; i++) {
+  const p0  = trucoPower(qc.options[0]);
+  const p1  = trucoPower(qc.options[1]);
+  const agg = _opModel.aggressionLevel;
+  let wins  = 0;
+  for (let i = 0; i < 300; i++) {
     const myPow = Math.random() < 0.5 ? p0 : p1;
-    // Opponent model: skewed toward their historical aggression
-    const r = Math.random();
-    const aggFactor = _opModel.aggressionLevel;
-    // If opponent is aggressive, more high cards; if passive, more low
-    const oPow = r < 0.35 - aggFactor*0.15 ? 1+Math.floor(Math.random()*4)
-               : r < 0.70 - aggFactor*0.10 ? 5+Math.floor(Math.random()*5)
-               : 10+Math.floor(Math.random()*5);
+    const r     = Math.random();
+    const oPow  = r < 0.35 - agg * 0.15 ? 1 + Math.floor(Math.random() * 4)
+                : r < 0.70 - agg * 0.10 ? 5 + Math.floor(Math.random() * 5)
+                :                          10 + Math.floor(Math.random() * 5);
     wins += myPow > oPow ? 1 : myPow === oPow ? 0.5 : 0;
   }
   return wins / 300;
 }
 
-// Decision-tree expected utility for truco response
-// Returns expected point gain if we accept vs reject
-function legendTrucoUtility(accept, level, hand, tw, tl) {
-  const nxt     = TRUCO_LEVELS[level];
-  const prev    = TRUCO_LEVELS[level - 1];
-  const ptAccept = nxt ? nxt.pts : 3;
-  const ptReject = prev ? prev.pts : 1;
-
-  if (!accept) return ptReject * 0.95; // near-certain points from rejection
-
-  // If we accept: P(win hand) * pts_accept - P(lose hand) * pts_accept
-  const pows   = hand.filter(qc=>qc&&qc.options).map(qc=>legendBazaWinProb(qc));
-  const pBaza  = pows.length ? Math.max(...pows) : 0.5;
-  // Hand win probability: rough heuristic from baza win probs and current score
-  const pHandWin = tw >= 1 ? pBaza * 0.7 + 0.3 : pBaza;
-  return pHandWin * ptAccept - (1 - pHandWin) * ptAccept;
-}
-
-// Decide whether to call, fold, raise on truco (legend)
-// Returns: 'accept' | 'reject' | 'raise'
-function legendTrucoDecision(level, hand) {
+function legendTrucoDecision(level, hand, isResponding) {
   const tw = G.trickWinners.filter(w => w === G.players[G.aiSeat].team).length;
   const tl = G.trickWinners.filter(w => w !== G.players[G.aiSeat].team && w !== -1).length;
+  const pHandWin = aiEstimateHandWinProb(hand, tw, tl);
 
-  // Adjust for human bluff rate: if they bluff a lot, lower resistance
-  const bluffAdj    = _opModel.trucoBluffRate;
-  const uAccept     = legendTrucoUtility(true,  level, hand, tw, tl) * (1 + bluffAdj * 0.5);
-  const uReject     = legendTrucoUtility(false, level, hand, tw, tl);
-  const canRaise    = level < 3 && TRUCO_LEVELS[level + 1];
-  const pows        = hand.filter(qc=>qc&&qc.options).map(qc=>aiExpectedPower(qc));
-  const maxPow      = pows.length ? Math.max(...pows) : 0;
+  const nxt      = TRUCO_LEVELS[level];
+  const prev     = TRUCO_LEVELS[level > 0 ? level - 1 : 0];
+  const ptAccept = nxt  ? nxt.pts  : 4;
+  const ptReject = prev ? prev.pts : 1;
+  const maxEP    = hand.filter(qc => qc && qc.options).map(qc => aiExpectedPower(qc));
+  const maxPow   = maxEP.length ? Math.max(...maxEP) : 0;
+  const canRaise = level < 3 && TRUCO_LEVELS[level + 1];
+  const bluffRate = _opModel.trucoBluffRate;
+  const r         = Math.random();
 
-  // Raise if: raising has higher EV than flat call AND we have cards OR human often folds
-  const uRaise = canRaise
-    ? uAccept * (maxPow >= 10 ? 1.4 : 0.9) * (1 + _opModel.folds / Math.max(_opModel.handsPlayed, 1) * 0.6)
-    : -999;
+  const aiTeam   = G.players[G.aiSeat].team;
+  const oppScore = G.scores[1 - aiTeam];
+  const loseEndsGame      = (oppScore + ptAccept) >= G.target;
+  const losePutsOppClose  = (oppScore + ptAccept) >= G.target - 2;
+  const rejectEndsGame    = (oppScore + ptReject) >= G.target;
 
-  if (uRaise > uAccept && uRaise > uReject) return 'raise';
-  if (uAccept > uReject) return 'accept';
-  return 'reject';
+  if (isResponding) {
+    const breakEven   = (ptAccept - ptReject) / (2 * ptAccept);
+    const levelMargin = [0, 0.04, 0.07, 0.10][level] || 0.10;
+    const scoreMult   = loseEndsGame ? 1.8 : losePutsOppClose ? 1.3 : 1.0;
+    const bluffDisc   = bluffRate * 0.12;
+    const threshold   = Math.max(0.10, breakEven + levelMargin * scoreMult - bluffDisc);
+
+    if (loseEndsGame && pHandWin < 0.38 && !rejectEndsGame) return 'reject';
+    if (pHandWin < threshold) return 'reject';
+
+    const foldRate = Math.min(0.55, _opModel.folds / Math.max(_opModel.handsPlayed, 1) + 0.10);
+    const uRaise   = canRaise && maxPow >= 8.5
+      ? foldRate * ptAccept + (1 - foldRate) * (2 * pHandWin - 1) * TRUCO_LEVELS[level + 1].pts
+      : -999;
+    const uAccept  = (2 * pHandWin - 1) * ptAccept;
+    if (canRaise && uRaise > uAccept && r < 0.18) return 'raise';
+    return 'accept';
+
+  } else {
+    const pOppFold = Math.min(0.55, _opModel.folds / Math.max(_opModel.handsPlayed, 1) + 0.22);
+    const evSing   = pOppFold * ptReject + (1 - pOppFold) * (2 * pHandWin - 1) * ptAccept;
+
+    if (loseEndsGame && pHandWin < 0.42 && !rejectEndsGame) return 'reject';
+
+    if (evSing > 0.25) {
+      if (canRaise && maxPow >= 9 && pHandWin >= 0.58 && r < 0.22) return 'raise';
+      return 'accept';
+    }
+    if (pHandWin >= 0.40 && tl >= 1 && r < 0.32) return 'accept';
+    if (pHandWin >= 0.38 && r < 0.15)             return 'accept';
+    return 'reject';
+  }
 }
 
-// Legend: what to sing for envido
 function legendEnvidoCall(metric) {
-  const pWin = legendEnvidoWinProb(metric);
-  const aggr = _opModel.aggressionLevel;
-
-  // Scale call based on expected win probability and opponent model
-  if (pWin >= 0.80) return 'falta envido';
-  if (pWin >= 0.65) return 'real envido';
-  if (pWin >= 0.52) return 'envido';
-
-  // Opponent model bluff: if human folds envido often, bluff more
+  const pWin     = legendEnvidoWinProb(metric);
   const foldRate = _opModel.folds / Math.max(_opModel.handsPlayed, 1);
-  if (foldRate > 0.40 && metric.mu >= 14 && Math.random() < 0.35) return 'envido';
-  if (aggr > 0.60 && metric.mu >= 17 && Math.random() < 0.25) return 'envido';
+  const r        = Math.random();
+  if (pWin >= 0.70) return 'falta envido';
+  if (pWin >= 0.54) return 'real envido';
+  if (pWin >= 0.42) return 'envido';
+  if (foldRate > 0.35 && metric.mu >= 13 && r < 0.28) return 'envido';
+  if (metric.mu >= 15 && r < 0.12) return 'envido';
   return null;
 }
 
-// Legend card choice: full minimax over 3 bazas with quantum enumeration
 function aiChooseCardLegend(valid, hand) {
   const tw     = G.trickWinners.filter(w => w === G.players[G.aiSeat].team).length;
   const tl     = G.trickWinners.filter(w => w !== G.players[G.aiSeat].team && w !== -1).length;
-  const scored = valid.map(qc => ({
-    qc,
-    ep:  aiExpectedPower(qc),
-    pw:  legendBazaWinProb(qc)
-  }));
+  const scored = valid.map(qc => ({ qc, ep: aiExpectedPower(qc), pw: legendBazaWinProb(qc) }));
 
-  // 3-baza expected-value lookahead
-  // State: (bazasWon, bazasLost, cardsLeft) → value
-  // Use: choose card that maximizes P(winning the hand)
-  function handWinProb(ownWins, oppWins, remaining) {
+  function hwp(ownWins, oppWins, rem) {
     if (ownWins >= 2) return 1.0;
     if (oppWins >= 2) return 0.0;
-    if (remaining === 0) return ownWins > oppWins ? 1.0 : ownWins === oppWins ? 0.5 : 0.0;
-    return 0.5; // simplified: tie positions
+    if (rem === 0) return ownWins > oppWins ? 1.0 : ownWins === oppWins ? 0.5 : 0.0;
+    return 0.5;
   }
 
-  let bestScore = -Infinity, chosen = scored[0].qc;
-
+  let best = -Infinity, chosen = scored[0].qc;
   for (const s of scored) {
-    // If we play this card:
-    const pWin  = s.pw;
-    const pLose = 1 - pWin;
-    const remaining = 3 - G.trickIdx - 1;
-
-    // EV of playing this card
-    let ev = 0;
+    const rem = 3 - G.trickIdx - 1;
+    let ev    = 0;
     if (G.trickIdx === 0) {
-      // After baza 1: if we win, we're ahead with 2 cards left
-      // Try to play card closest to optimal information value
-      // Ideal: win baza 1 to pressure, but save best for baza 3
-      const winAhead  = handWinProb(tw+1, tl,   remaining);
-      const loseBehind = handWinProb(tw,   tl+1, remaining);
-      ev = pWin * winAhead + pLose * loseBehind;
-      // Penalty for using a very strong card in baza 1 (save it)
+      ev = s.pw * hwp(tw+1, tl, rem) + (1-s.pw) * hwp(tw, tl+1, rem);
       ev -= s.ep > 12 ? 0.15 : 0;
     } else if (G.trickIdx === 1) {
-      // Baza 2: critical — win if possible, use min necessary
-      const winAhead   = handWinProb(tw+1, tl,   remaining);
-      const loseBehind = handWinProb(tw,   tl+1, remaining);
-      ev = pWin * winAhead + pLose * loseBehind;
-      // Prefer cheaper card if win prob is similar (save strong card for baza 3)
+      ev = s.pw * hwp(tw+1, tl, rem) + (1-s.pw) * hwp(tw, tl+1, rem);
       if (tw === 1 && tl === 0) ev -= s.ep * 0.02;
     } else {
-      // Baza 3: play best card available, no savings
-      ev = pWin;
+      ev = s.pw;
     }
-
-    if (ev > bestScore) {
-      bestScore = ev;
-      chosen = s.qc;
-    }
+    if (ev > best) { best = ev; chosen = s.qc; }
   }
-
   return hand.indexOf(chosen);
 }
 
+// ── Reset ─────────────────────────────────────────────────────────
+
+// Lightweight reset between hands: invalidates stale timeouts without
+// clearing opponent model or bluff history.
+export function resetAITurn() {
+  _aiPending = false;
+  aiNewToken(); // invalidates any setTimeout callbacks from previous hand
+  if (G) G.aiThinking = false;
+}
 
 export function resetAIState() {
-  _aiPending = false;
-  _aiTurnToken = 0;
-  _humanTrucoHistory = [];
+  _aiPending          = false;
+  _aiTurnToken        = 0;
+  _humanTrucoHistory  = [];
   _humanEnvidoHistory = [];
-  _humanBluffHistory = [];
+  _humanBluffHistory  = [];
   _opModel = {
-    trucoBluffRate:0.20,
-    envidoBluffRate:0.15,
-    aggressionLevel:0.50,
-    avgEnvidoMu:20,
-    folds:0,
-    calls:0,
-    raises:0,
-    handsPlayed:0,
-    envidoSamples:[],
+    trucoBluffRate:  0.20,
+    envidoBluffRate: 0.15,
+    aggressionLevel: 0.50,
+    avgEnvidoMu:     20,
+    folds: 0, calls: 0, raises: 0, handsPlayed: 0,
+    envidoSamples: [],
   };
 }
