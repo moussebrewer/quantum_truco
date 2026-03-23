@@ -130,6 +130,18 @@ export function initSetupOptions() {
   });
 
   updateSetupModeUi(setupCfg.mode);
+
+  // Player name input
+  const nameInput = document.getElementById('player-name-input') as HTMLInputElement | null;
+  if (nameInput) {
+    const saved = localStorage.getItem('qt-player-name');
+    if (saved) { nameInput.value = saved; setupCfg.playerName = saved; }
+    nameInput.addEventListener('input', () => {
+      const v = nameInput.value.trim() || 'Jugador 1';
+      setupCfg.playerName = v;
+      localStorage.setItem('qt-player-name', v);
+    });
+  }
 }
 
 
@@ -590,13 +602,15 @@ function dispatchPlayCard(handIdx) {
     const srcRect   = srcEl?.getBoundingClientRect();
 
     if (srcRect && ghostSvg) {
-      // Destination: center of arena-slots
-      const arenaEl  = document.getElementById('arena-slots');
-      const arenaRect = arenaEl?.getBoundingClientRect();
-      const srcCX    = srcRect.left + srcRect.width  / 2;
-      const srcCY    = srcRect.top  + srcRect.height / 2;
-      const destCX   = arenaRect ? arenaRect.left + arenaRect.width  / 2 : window.innerWidth  / 2;
-      const destCY   = arenaRect ? arenaRect.top  + arenaRect.height / 2 : window.innerHeight * 0.38;
+      const srcCX = srcRect.left + srcRect.width  / 2;
+      const srcCY = srcRect.top  + srcRect.height / 2;
+      // Target: viewer's arena-seat-zone (the arena-slot inside it)
+      const vs      = G.viewerSeat ?? session?.seat ?? 0;
+      const destZone = document.querySelector(`#arena-slots .arena-seat-zone[data-seat="${vs}"] .arena-slot`)
+                    || document.getElementById('arena-slots');
+      const destRect2 = destZone?.getBoundingClientRect();
+      const destCX  = destRect2 ? destRect2.left + destRect2.width  / 2 : window.innerWidth  / 2;
+      const destCY  = destRect2 ? destRect2.top  + destRect2.height / 2 : window.innerHeight * 0.4;
 
       const ghost = document.createElement('div');
       ghost.style.cssText = `position:fixed;pointer-events:none;z-index:600;
@@ -665,14 +679,16 @@ function dispatchGoToMazo() {
     return;
   }
   // Online: show local confirmation modal, then send to server on confirm
-  const oppTeam = 1 - (G.players[G.viewerSeat]?.team ?? 0);
-  const pts     = (G.bet?.level >= 0 && G.bet?.level <= 3)
-    ? [1, 2, 3, 4][G.bet.level]
-    : 1;
-  const p = G.players[G.viewerSeat];
+  const viewerSeat  = G.viewerSeat ?? 0;
+  const viewerTeam  = G.players[viewerSeat]?.team ?? 0;
+  const oppTeam     = 1 - viewerTeam;
+  const betLevel    = G.bet?.level ?? 0;
+  const pts         = [1, 2, 3, 4][betLevel] ?? 1;
+  const p           = G.players[viewerSeat];
+  const oppName     = G.players.find(pl => pl.team === oppTeam)?.name || `Eq ${oppTeam}`;
   showModal('danger',
     `${p?.name || 'Vos'} se va al Mazo`,
-    `Eq ${oppTeam} cobra <strong>${pts} pts</strong> de Truco.`,
+    `<strong>${oppName}</strong> cobra <strong>${pts} pts</strong> de Truco.`,
     pts,
     [
       { label: 'Confirmar', cls: 'danger', cb: () => { closeModal(); sendGoToMazo(); }},
@@ -687,9 +703,9 @@ function dispatchGoToMazo() {
 
 export function renderGame() {
   updateHeader();
+  renderOppHand();
   renderArena();
   renderHand();
-  renderHistoryPanel();
   renderActionPanel();
 }
 
@@ -697,15 +713,20 @@ function updateHeader() {
   const { scores, target, handNum, bet } = G;
   renderTally('score-tally-0', scores[0], 0);
   renderTally('score-tally-1', scores[1], 1);
-  // Update team name labels using actual player names
+
+  // Dynamic team names: viewer is "Vos", opponent is their name
   const viewerSeat = getViewerSeatForRender();
-  const t0nameEl = document.querySelector('.score-team-name.t0');
-  const t1nameEl = document.querySelector('.score-team-name.t1');
-  if (t0nameEl && G.tableSize === 2) {
-    // team 0 = seat 0, team 1 = seat 1
-    t0nameEl.textContent = G.players[0]?.name || 'vos';
-    if (t1nameEl) t1nameEl.textContent = G.players[1]?.name || 'ellos';
-  }
+  const viewerTeam = G.players[viewerSeat]?.team ?? 0;
+  const oppTeam    = 1 - viewerTeam;
+  const myName     = G.players[viewerSeat]?.name || 'Vos';
+  const oppPlayers = G.players.filter(p => p.team === oppTeam);
+  const oppName    = oppPlayers.length === 1 ? oppPlayers[0].name : 'Ellos';
+
+  const nameT0 = document.querySelector('.score-team-name.t0');
+  const nameT1 = document.querySelector('.score-team-name.t1');
+  if (nameT0) nameT0.textContent = viewerTeam === 0 ? myName : oppName;
+  if (nameT1) nameT1.textContent = viewerTeam === 1 ? myName : oppName;
+
   document.getElementById('hdr-round').textContent = `Mano ${handNum} · Baza ${G.trickIdx+1}`;
   const lvl = TRUCO_LEVELS[bet.level];
   document.getElementById('hdr-bet').textContent = `Truco: ${lvl.name} (${lvl.pts} pt${lvl.pts>1?'s':''})`;
@@ -746,62 +767,112 @@ function renderTally(elId, pts, team) {
 export function renderArena() {
   const slotsEl = document.getElementById('arena-slots');
   const bazaEl  = document.getElementById('baza-result-display');
+  if (!slotsEl) return;
   slotsEl.innerHTML = '';
 
-  const cScale = G.tableSize > 2 ? 0.62 : 0.76;
+  const cScale = G.tableSize > 2 ? 0.62 : 0.72;
+  const viewerSeat = getViewerSeatForRender();
+  const oppSeat    = allSeats().find(s => s !== viewerSeat) ?? (1 - viewerSeat);
 
-  // Opponent deck indicator (left side of arena)
-  renderOpponentIndicator();
+  // Always render 2 seat zones: opponent on top, viewer on bottom
+  for (const seat of [oppSeat, viewerSeat]) {
+    const zone = document.createElement('div');
+    zone.className = 'arena-seat-zone';
+    zone.dataset.seat = String(seat);
 
-  // Vertical layout: render opponent's card first (top), viewer's card last (bottom)
-  const _viewerSeatArena = getViewerSeatForRender();
-  const _renderOrder = [...G.playOrder].sort((a, b) => {
-    if (a === _viewerSeatArena) return 1;   // viewer goes last (bottom)
-    if (b === _viewerSeatArena) return -1;
-    return 0;
-  });
-  _renderOrder.forEach(seat => {
-    const qc = G.playsThisTrick[seat];
-    if (!qc) return;
-    const slot = document.createElement('div');
-    slot.className = 'arena-slot';
-    const d = document.createElement('div');
-    const rot = ((seat * 7) % 15) - 7;
-    d.style.cssText = `--ds:${cScale};--dr:${rot}deg;transform:scale(${cScale});transform-origin:top center;flex-shrink:0;`;
-    if (qc.collapsedTo) {
-      const c = qc.collapsedTo;
-      d.innerHTML = buildCardSVG(c.rank, c.suit, `ct_${seat}_${c.rank}_${c.suit}`);
-    } else {
-      const [a, b] = qc.options;
-      d.innerHTML = buildEntangled(a.rank, a.suit, b.rank, b.suit, false);
-      d.style.filter = 'drop-shadow(0 0 10px rgba(0,200,255,0.6))';
+    // History stack: previous tricks for this seat, stacked behind
+    if ((G.trickHistory || []).length > 0) {
+      const stackWrap = document.createElement('div');
+      stackWrap.className = 'arena-history-stack';
+      G.trickHistory.forEach((entry, tidx) => {
+        const e = entry.find(e => e.seat === seat);
+        if (!e) return;
+        const jitter = ((seat * 7 + tidx * 13) % 14) - 7;
+        const offX   = (tidx - G.trickHistory.length + 1) * 5;
+        const sc     = cScale * 0.88;
+        const won    = G.trickWinners[tidx] === teamOf(seat);
+        const glow   = won ? (teamOf(seat) === 0 ? 'rgba(0,160,255,0.55)' : 'rgba(204,17,51,0.55)') : 'rgba(255,255,255,0.08)';
+        const hCard  = document.createElement('div');
+        hCard.className = 'history-stacked-card';
+        hCard.style.cssText = `transform:scale(${sc}) translate(${offX}px,${tidx*2}px) rotate(${jitter}deg);opacity:${0.28 + tidx*0.08};filter:drop-shadow(0 0 4px ${glow});`;
+        hCard.innerHTML = buildCardSVG(e.card.rank, e.card.suit, `hs_${tidx}_${seat}`);
+        stackWrap.appendChild(hCard);
+      });
+      zone.appendChild(stackWrap);
     }
-    slot.appendChild(d);
-    slotsEl.appendChild(slot);
-  });
+
+    // Current card slot
+    const slotDiv = document.createElement('div');
+    slotDiv.className = 'arena-slot';
+    slotDiv.dataset.seat = String(seat);
+
+    const qc = G.playsThisTrick[seat];
+    if (qc) {
+      const d   = document.createElement('div');
+      const rot = ((seat * 7) % 15) - 7;
+      d.style.cssText = `--ds:${cScale};--dr:${rot}deg;transform:scale(${cScale});transform-origin:top center;flex-shrink:0;`;
+      if (qc.collapsedTo) {
+        const c = qc.collapsedTo;
+        d.innerHTML = buildCardSVG(c.rank, c.suit, `ct_${seat}_${c.rank}_${c.suit}`);
+      } else {
+        const [a, b] = qc.options;
+        d.innerHTML = buildEntangled(a.rank, a.suit, b.rank, b.suit, false);
+        d.style.filter = 'drop-shadow(0 0 10px rgba(0,200,255,0.6))';
+      }
+      slotDiv.appendChild(d);
+    }
+
+    zone.appendChild(slotDiv);
+    slotsEl.appendChild(zone);
+  }
 
   if (G.phase === 'baza_end' || G.phase === 'hand_end') {
     const last = G.trickWinners[G.trickWinners.length - 1];
-    bazaEl.textContent = last === -1 ? '⚔ PARDA' : `▲ Gana ${last === 0 ? 'vos' : 'ellos'}`;
-    bazaEl.style.color = last === -1 ? 'var(--gold)' : last === 0 ? 'var(--accent-a)' : 'var(--accent-b)';
-    // Highlight winner's card slot
-    const slots = document.querySelectorAll('#arena-slots .arena-slot');
-    if (last === -1) {
-      slots.forEach(s => s.classList.add('winner-draw'));
-    } else {
-      G.playOrder.forEach((seat, i) => {
-        if (slots[i] && teamOf(seat) === last) slots[i].classList.add(`winner-t${last}`);
-      });
-    }
+    bazaEl.textContent = last === -1 ? '⚔ PARDA' : `▲ ${last === teamOf(viewerSeat) ? 'Ganás' : 'Pierden'}`;
+    bazaEl.style.color = last === -1 ? 'var(--gold)' : last === teamOf(viewerSeat) ? 'var(--accent-a)' : 'var(--accent-b)';
+    slotsEl.querySelectorAll('.arena-slot').forEach(slot => {
+      const s = parseInt((slot as HTMLElement).dataset.seat || '0');
+      if (last === -1) slot.classList.add('winner-draw');
+      else if (teamOf(s) === last) slot.classList.add(`winner-t${last}`);
+    });
   } else if (G.phase === 'collapsing') {
     bazaEl.textContent = '⊗ Colapsando…';
     bazaEl.style.color = 'rgba(0,200,255,0.8)';
-  } else {
+  } else if (bazaEl) {
     bazaEl.textContent = '';
   }
 }
 
+// Render opponent's face-down cards in the top zone
+function renderOppHand() {
+  const zone = document.getElementById('opp-hand-zone');
+  if (!zone) return;
+  zone.innerHTML = '';
+
+  const viewerSeat = getViewerSeatForRender();
+  const oppSeat    = allSeats().find(s => s !== viewerSeat) ?? (1 - viewerSeat);
+  const opp        = G.players[oppSeat];
+  if (!opp) return;
+
+  const isMano = oppSeat === G.manoSeat;
+  const nameDiv = document.createElement('div');
+  nameDiv.className = 'opp-zone-name';
+  nameDiv.textContent = opp.name + (isMano ? ' ✦' : '');
+  zone.appendChild(nameDiv);
+
+  const row = document.createElement('div');
+  row.className = 'opp-hand-row';
+  const count = opp.hand?.length ?? 0;
+  for (let i = 0; i < count; i++) {
+    const back = document.createElement('div');
+    back.className = 'opp-card-back';
+    row.appendChild(back);
+  }
+  zone.appendChild(row);
+}
+
 function renderOpponentIndicator() {
+  return; // replaced by renderOppHand in field-opp
   let ind = document.getElementById('opp-indicator');
   if (!ind) {
     ind = document.createElement('div');
@@ -893,12 +964,16 @@ export function renderHand() {
   });
 
   if (infoEl) {
-    if (G.trickIdx >= 2) infoEl.innerHTML = '';
+    // Only show metrics after deal (hand-row has cards) and in baza 0
+    if (G.trickIdx >= 1 || (rowEl && rowEl.children.length === 0)) infoEl.innerHTML = '';
     else renderEnvidoInfo(p, infoEl);
   }
 }
 
 function renderEnvidoInfo(p, el) {
+  // Don't show metrics when hand-row is empty (deal animation in progress)
+  const handRow = document.getElementById('hand-row');
+  if (!handRow || handRow.children.length === 0) { el.innerHTML = ''; return; }
   const liveHand = p.hand.map(qc => {
     const visibleCard = getVisibleCard(qc);
     return visibleCard
@@ -906,6 +981,8 @@ function renderEnvidoInfo(p, el) {
       : qc;
   });
   const lm = envidoMetric(liveHand);
+  // Sanity check — if metrics look infinite/NaN don't show
+  if (!isFinite(lm.mu) || isNaN(lm.mu)) { el.innerHTML = ''; return; }
   let html = `
     <div class="envido-stat"><span class="envido-stat-label">Envido μ</span><span class="envido-stat-val">${lm.mu.toFixed(1)}</span></div>
     <div class="envido-stat"><span class="envido-stat-label">P(≥28)</span><span class="envido-stat-val">${(lm.p28*100).toFixed(0)}%</span></div>
@@ -958,7 +1035,7 @@ function renderHistoryPanel() {
     const wlbl = document.createElement('div');
     wlbl.className = 'history-winner';
     if (winner === -1) { wlbl.textContent = '⚔ Parda'; wlbl.style.color = 'var(--gold)'; }
-    else { wlbl.textContent = `▲ ${winner===0?'vos':'ellos'}`; wlbl.style.color = winner===0?'var(--accent-a)':'var(--accent-b)'; }
+    else { wlbl.textContent = `▲ Eq ${winner===0?'A':'B'}`; wlbl.style.color = winner===0?'var(--accent-a)':'var(--accent-b)'; }
     baza.appendChild(wlbl);
     list.appendChild(baza);
   });
@@ -970,20 +1047,17 @@ function renderActionPanel() {
   if (!turnLbl || !btns) return;
   btns.innerHTML = '';
 
-  if (G.phase === 'collapsing') { turnLbl.textContent = '⊗ Colapsando…'; return; }
-
-  if (G.aiSeat !== null && G.aiThinking && !G.pendingChant) {
-    turnLbl.textContent = `${G.players[G.aiSeat].name} está pensando…`;
-    return;
-  }
+  if (G.phase === 'collapsing') { turnLbl.textContent = '⊗'; return; }
 
   const viewerSeat = getViewerSeatForRender();
 
-  if (G.onlineMode && G.statusText) {
-    addChantState(btns, 'Sala', G.statusText, '');
-  }
   if (G.onlineMode && G.opponentConnected === false) {
-    turnLbl.textContent = 'Esperando rival…';
+    turnLbl.textContent = 'Sin rival';
+    return;
+  }
+
+  if (G.aiSeat !== null && G.aiThinking && !G.pendingChant) {
+    turnLbl.textContent = '…';
     return;
   }
 
@@ -991,16 +1065,16 @@ function renderActionPanel() {
     if (viewerSeat === G.pendingChant.responderSeat) {
       renderPendingChant(turnLbl, btns);
     } else {
-      const caller = G.players[G.pendingChant.callerSeat];
-      const responder = G.players[G.pendingChant.responderSeat];
-      turnLbl.textContent = `Turno de ${responder.name}`;
-      addChantState(btns, `${caller.name} cantó`, G.pendingChant.type.toUpperCase(), 'Esperando respuesta');
+      const levelName = G.pendingChant.type === 'truco'
+        ? (TRUCO_LEVELS[G.pendingChant.data?.level]?.name || 'Truco')
+        : G.pendingChant.type.toUpperCase();
+      turnLbl.textContent = levelName;
     }
     return;
   }
 
   if (G.onlineMode && viewerSeat !== G.activeSeat) {
-    turnLbl.textContent = `Turno de ${G.players[G.activeSeat].name}`;
+    turnLbl.textContent = G.players[G.activeSeat]?.name || '?';
     return;
   }
 
@@ -1010,20 +1084,19 @@ function renderActionPanel() {
   const chant   = G.chant;
   const actTeam = p.team;
 
-  turnLbl.textContent = p.name;
+  turnLbl.textContent = 'Turno';
 
   if (G.phase === 'chant') {
-    const manoOrder = circularOrder(allSeats(), G.manoSeat, G.tableSize);
-    const envidoOk  = G.tableSize === 2 ? true : manoOrder.indexOf(seat) >= G.tableSize - 2;
-    const envCalls  = chant.envido.calls;
-    const canOpenEnvido = !chant.envido.resolved && !chant.florBlockedEnvido && envidoOk && envCalls.length === 0;
+    const manoOrder     = circularOrder(allSeats(), G.manoSeat, G.tableSize);
+    const envidoOk      = G.tableSize === 2 ? true : manoOrder.indexOf(seat) >= G.tableSize - 2;
+    const canOpenEnvido = !chant.envido.resolved && !chant.florBlockedEnvido && envidoOk && chant.envido.calls.length === 0;
     if (canOpenEnvido) {
-      addBtn(btns, 'Envido',        'success', () => dispatchInitiateEnvido('envido'));
-      addBtn(btns, 'Real Envido',   'success', () => dispatchInitiateEnvido('real envido'));
-      addBtn(btns, 'Falta Envido',  'success', () => dispatchInitiateEnvido('falta envido'));
+      addBtn(btns, 'Envido',      'success', () => dispatchInitiateEnvido('envido'));
+      addBtn(btns, 'Real Env.',   'success', () => dispatchInitiateEnvido('real envido'));
+      addBtn(btns, 'Falta Env.',  'success full-width', () => dispatchInitiateEnvido('falta envido'));
     }
     if (G.conFlor && !chant.flor.resolved && !chant.florBlockedEnvido)
-      addBtn(btns, '🌸 Flor', 'flor', dispatchSingFlor);
+      addBtn(btns, '🌸 Flor', 'flor full-width', dispatchSingFlor);
     if (canTeamRaiseNow(bet, actTeam)) {
       const nxt = TRUCO_LEVELS[bet.level + 1];
       if (nxt) addBtn(btns, `${nxt.name} (${nxt.pts}p)`, 'gold', dispatchSingTruco);
@@ -1039,22 +1112,19 @@ function renderActionPanel() {
 
   } else if (G.phase === 'baza_end') {
     const last = G.trickWinners[G.trickWinners.length - 1];
-    turnLbl.textContent = last === -1 ? '⚔ Parda' : `${last===0?'vos':'ellos'} gana`;
+    turnLbl.textContent = last === -1 ? '⚔ Parda' : last === teamOf(viewerSeat) ? '▲ Ganás' : '▼ Perdiste';
     if (!G.onlineMode && canTeamRaiseNow(bet, actTeam)) {
       const nxt = TRUCO_LEVELS[bet.level + 1];
-      if (nxt) addBtn(btns, `${nxt.name} (${nxt.pts}p)`, 'gold', dispatchSingTruco);
+      if (nxt) addBtn(btns, `${nxt.name} (${nxt.pts}p)`, 'gold full-width', dispatchSingTruco);
     }
 
   } else if (G.phase === 'hand_end') {
-    turnLbl.textContent = `+${G.handScore[0]} / +${G.handScore[1]}`;
-    if (!G.onlineMode) addBtn(btns, 'Nueva Mano →', 'primary', startNewHand);
-    // In AI mode: auto-advance after 2.5 s so the human doesn't have to click
+    turnLbl.textContent = `+${G.handScore[0]}
+/${G.handScore[1]}`;
+    if (!G.onlineMode) addBtn(btns, 'Nueva Mano', 'primary full-width', startNewHand);
     if (G.aiSeat !== null && !G.onlineMode && !G._autoNewHandScheduled) {
       G._autoNewHandScheduled = true;
-      setTimeout(() => {
-        G._autoNewHandScheduled = false;
-        if (G && G.phase === 'hand_end') startNewHand();
-      }, 2500);
+      setTimeout(() => { G._autoNewHandScheduled = false; if (G && G.phase === 'hand_end') startNewHand(); }, 2500);
     }
   }
 }
@@ -1095,44 +1165,29 @@ function renderPendingChant(turnLbl, btns) {
     }
 
   } else if (pc.type === 'envido') {
-    const curPts = envidoTotalIfAccepted(env.calls, env.callerTeam, G.target, G.scores);
-    const rejPts = envidoPointsIfRejected(env.calls, env.callerTeam, G.target, G.scores);
     const raises = envidoCanRaise(env.calls[env.calls.length - 1]);
-    const callStr = env.calls.map(c => c.toUpperCase()).join(' + ');
-
-    turnLbl.textContent = p.name;
-    addChantState(btns,
-      `${caller.name} canta`,
-      callStr,
-      `Querer: ${curPts} pts | Rechazar: Eq ${env.callerTeam} cobra ${rejPts} pts`
-    );
-
-    addBtn(btns, `✓ Quiero (${curPts}p)`, 'success', () => dispatchRespondEnvido('accept'));
-    addBtn(btns, `✗ No Quiero (+${rejPts}p)`, 'danger', () => dispatchRespondEnvido('reject'));
+    const callStr = env.calls[env.calls.length - 1]?.toUpperCase() || 'ENVIDO';
+    turnLbl.textContent = callStr;
+    addBtn(btns, '✓ Quiero', 'success', () => dispatchRespondEnvido('accept'));
+    addBtn(btns, '✗ No Quiero', 'danger', () => dispatchRespondEnvido('reject'));
     for (const r of raises) {
-      addBtn(btns, `↑ ${r}`, 'gold', () => dispatchRespondEnvido(r));
+      const lbl = r === 'falta envido' ? '↑ Falta' : r === 'real envido' ? '↑ Real' : '↑ Envido';
+      addBtn(btns, lbl, 'gold', () => dispatchRespondEnvido(r));
     }
 
   } else if (pc.type === 'flor') {
     const { stage } = pc.data;
-    turnLbl.textContent = p.name;
-
+    turnLbl.textContent = 'FLOR';
     if (stage === 'initial') {
-      addChantState(btns, `${caller.name} canta`, 'FLOR', `¿También tenés flor?`);
-      addBtn(btns, '🌸 Sí, tengo Flor', 'success', () => dispatchRespondFlor('yes'));
-      addBtn(btns, `✗ No (Eq ${teamOf(pc.callerSeat)} cobra 3p)`, 'danger', () => dispatchRespondFlor('no'));
-
+      addBtn(btns, '🌸 Tengo Flor', 'flor', () => dispatchRespondFlor('yes'));
+      addBtn(btns, '✗ No tengo',    'danger', () => dispatchRespondFlor('no'));
     } else if (stage === 'contraflor') {
-      addChantState(btns, 'Ambos tienen Flor', '¿CONTRAFLOR?', ``);
-      addBtn(btns, 'Flor simple', 'primary', () => dispatchRespondFlor('simple'));
-      addBtn(btns, 'Contraflor (+dif)', 'gold', () => dispatchRespondFlor('contraflor'));
-      addBtn(btns, 'Contraflor al Resto', 'danger', () => dispatchRespondFlor('alresto'));
-
+      addBtn(btns, '✓ Simple',      'primary',    () => dispatchRespondFlor('simple'));
+      addBtn(btns, '🌸 Contraflor', 'gold',        () => dispatchRespondFlor('contraflor'));
+      addBtn(btns, '⚡ Al Resto',    'danger full-width', () => dispatchRespondFlor('alresto'));
     } else if (stage === 'resp_contraflor') {
-      const lbl = pc.data.alResto ? 'CONTRAFLOR AL RESTO' : 'CONTRAFLOR';
-      addChantState(btns, `${caller.name} canta`, lbl, ``);
-      addBtn(btns, '✓ Quiero', 'success', () => dispatchRespondFlor('accept'));
-      addBtn(btns, '✗ No Quiero', 'danger', () => dispatchRespondFlor('reject'));
+      addBtn(btns, '✓ Quiero', 'flor',   () => dispatchRespondFlor('accept'));
+      addBtn(btns, '✗ Rechazo', 'danger', () => dispatchRespondFlor('reject'));
     }
   }
 }
@@ -1157,8 +1212,11 @@ function renderActionBar() { renderActionPanel(); }
 
 function addBtn(container, label, cls, cb) {
   const b = document.createElement('button');
-  b.className = 'act-btn ' + (cls === 'flor' ? 'success' : cls);
-  if (cls === 'flor') b.style.cssText = 'border-color:rgba(204,68,255,0.5);color:#cc44ff;background:rgba(204,68,255,0.08);';
+  const clsParts = cls.split(' ');
+  const baseClass = clsParts[0];
+  const extraClasses = clsParts.slice(1).join(' ');
+  b.className = 'act-btn ' + (baseClass === 'flor' ? 'success' : baseClass) + (extraClasses ? ' ' + extraClasses : '');
+  if (baseClass === 'flor') b.style.cssText = 'border-color:rgba(204,68,255,0.5);color:#cc44ff;background:rgba(204,68,255,0.08);';
   b.textContent = label;
   b.addEventListener('click', cb);
   container.appendChild(b);

@@ -59,7 +59,7 @@ const APP_HTML = `<!-- ═══════════════════
 <!-- ══════════════════════════════════════════════════════════ -->
 <div id="screen-setup" class="screen active">
   <h1 class="setup-title">QUANTUM ⊗ TRUCO</h1>
-  <div class="setup-version">v0.2</div>
+  <div class="setup-version">v0.1.1</div>
   <div class="setup-card">
     <div class="setup-row">
       <span class="setup-label">Modo</span>
@@ -93,14 +93,6 @@ const APP_HTML = `<!-- ═══════════════════
       <span class="setup-label">Con Flor</span>
       <button class="toggle-btn" id="btn-flor" onclick="toggleFlor()">NO</button>
     </div>
-    <div class="setup-divider" id="names-divider"></div>
-    <div class="setup-row" id="names-row">
-      <span class="setup-label">Nombres</span>
-      <div class="player-names-inputs">
-        <input id="player-name-0" class="player-name-input" maxlength="20" placeholder="Jugador 1" />
-        <input id="player-name-1" class="player-name-input" maxlength="20" placeholder="Jugador 2" />
-      </div>
-    </div>
     <div class="setup-divider" id="online-divider" style="display:none"></div>
     <div class="online-room-panel" id="online-room-panel" style="display:none">
       <div class="setup-row">
@@ -117,6 +109,11 @@ const APP_HTML = `<!-- ═══════════════════
         </div>
       </div>
       <div class="online-status" id="online-status">Elegí crear una sala o ingresá un código para unirte.</div>
+    </div>
+    <div class="setup-divider"></div>
+    <div class="setup-row">
+      <span class="setup-label">Tu nombre</span>
+      <input id="player-name-input" class="player-name-input" maxlength="18" placeholder="Jugador 1" autocomplete="off" />
     </div>
     <button class="start-btn" id="btn-start-game" onclick="startGame()">COMENZAR PARTIDA →</button>
   </div>
@@ -142,12 +139,12 @@ const APP_HTML = `<!-- ═══════════════════
   <div class="game-header">
     <div class="score-display">
       <div class="score-team">
-        <div class="score-team-name t0">vos</div>
+        <div class="score-team-name t0">Vos</div>
         <div class="score-pts-wrap" id="score-tally-0"></div>
       </div>
       <div class="score-sep">vs</div>
       <div class="score-team">
-        <div class="score-team-name t1">ellos</div>
+        <div class="score-team-name t1">Ellos</div>
         <div class="score-pts-wrap" id="score-tally-1"></div>
       </div>
     </div>
@@ -160,10 +157,11 @@ const APP_HTML = `<!-- ═══════════════════
     <button class="quantum-btn-small" id="btn-log-toggle" onclick="toggleLog()">⊗ LOG</button>
   </div>
 
-  <!-- Main area: log sidebar + arena + history sidebar -->
+  <!-- Main table: log overlay + game field -->
   <div class="game-table">
-    <!-- Log sidebar (left, open by default) -->
-    <div class="log-sidebar" id="log-sidebar">
+
+    <!-- Log sidebar (floating overlay) -->
+    <div class="log-sidebar closed" id="log-sidebar">
       <div class="log-sidebar-header">
         <span class="log-sidebar-title">⊗ Log</span>
         <button class="log-close-btn" onclick="toggleLog()" title="Cerrar log">✕</button>
@@ -171,37 +169,39 @@ const APP_HTML = `<!-- ═══════════════════
       <div class="log-entries" id="log-panel"></div>
     </div>
 
-    <div class="arena" id="arena">
-      <div class="mazo-stack" id="mazo-stack">
-        <div class="mazo-card mazo-c3"></div>
-        <div class="mazo-card mazo-c2"></div>
-        <div class="mazo-card mazo-c1" id="mazo-c1">⊗</div>
-        <div class="mazo-label">Mazo</div>
+    <!-- Game field: split into top / center / bottom -->
+    <div class="game-field" id="game-field">
+
+      <!-- TOP: opponent territory -->
+      <div class="field-opp" id="field-opp">
+        <div class="opp-hand-zone" id="opp-hand-zone"></div>
       </div>
-      <div class="baza-result" id="baza-result-display"></div>
-      <div class="arena-slots" id="arena-slots"></div>
-    </div>
-    <div class="history-panel" id="history-panel">
-      <div class="history-title">Bazas</div>
-      <div class="history-list" id="history-list"></div>
+
+      <!-- CENTER: play area -->
+      <div class="arena" id="arena">
+        <div class="mazo-stack" id="mazo-stack">
+          <div class="mazo-card mazo-c3"></div>
+          <div class="mazo-card mazo-c2"></div>
+          <div class="mazo-card mazo-c1" id="mazo-c1">⊗</div>
+          <div class="mazo-label">Mazo</div>
+        </div>
+        <div class="baza-result" id="baza-result-display"></div>
+        <div class="arena-slots" id="arena-slots"></div>
+      </div>
+
+      <!-- BOTTOM: my territory -->
+      <div class="field-mine" id="field-mine">
+        <div class="hand-row" id="hand-row"></div>
+        <div class="envido-info" id="envido-info"></div>
+      </div>
+
     </div>
   </div>
 
-  <!-- Bottom zone: cards + action panel side by side -->
-  <div class="bottom-zone">
-
-    <!-- Mano: cartas en fila + info envido -->
-    <div class="hand-area">
-      <div class="hand-row" id="hand-row"></div>
-      <div class="envido-info" id="envido-info"></div>
-    </div>
-
-    <!-- Cantos panel (a la derecha de las cartas) -->
-    <div class="chant-panel">
-      <div class="chant-turn" id="chant-turn">Turno</div>
-      <div class="chant-btns" id="chant-btns"></div>
-    </div>
-
+  <!-- Action bar (replaces bottom-zone) -->
+  <div class="chant-bar">
+    <div class="chant-turn" id="chant-turn">Turno</div>
+    <div class="chant-btns" id="chant-btns"></div>
   </div>
 
 </div>
@@ -284,27 +284,6 @@ declare global {
 
 mountApp();
 initSetupOptions();
-
-// Wire player name inputs to setupCfg
-function wireNameInputs() {
-  const n0 = document.getElementById('player-name-0') as HTMLInputElement | null;
-  const n1 = document.getElementById('player-name-1') as HTMLInputElement | null;
-  if (n0) n0.addEventListener('input', () => { setupCfg.playerNames[0] = n0.value; });
-  if (n1) n1.addEventListener('input', () => { setupCfg.playerNames[1] = n1.value; });
-}
-wireNameInputs();
-
-// Show/hide name inputs based on selected mode
-document.addEventListener('click', (e) => {
-  const btn = (e.target as HTMLElement).closest?.('.opt-btn[data-group="mode"]') as HTMLElement | null;
-  if (!btn) return;
-  const mode = btn.dataset.val || '';
-  const namesRow = document.getElementById('names-row');
-  const namesDivider = document.getElementById('names-divider');
-  const isHuman2p = (mode === 'human');
-  if (namesRow) namesRow.style.display = isHuman2p ? '' : 'none';
-  if (namesDivider) namesDivider.style.display = isHuman2p ? '' : 'none';
-});
 
 configureGameRuntime({
   renderGame,
