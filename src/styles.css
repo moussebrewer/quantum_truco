@@ -70,6 +70,16 @@ body {
   color: rgba(168,85,247,0.7); text-align: center; margin-bottom: 32px;
   text-transform: uppercase; position: relative; z-index: 1;
 }
+.setup-version {
+  font-family: 'Space Mono', monospace;
+  font-size: 0.7rem;
+  color: rgba(255,255,255,0.25);
+  text-align: center;
+  margin-top: -14px;
+  margin-bottom: 18px;
+  letter-spacing: 0.12em;
+}
+
 .setup-card {
   background: linear-gradient(135deg, var(--panel) 0%, var(--panel2) 100%);
   border: 1px solid var(--border-q); border-radius: 4px; padding: 28px 32px;

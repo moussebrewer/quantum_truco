@@ -1,4 +1,7 @@
 // @ts-nocheck
+// online.ts — must NOT import from ui.ts (circular dependency).
+// All UI calls go through game.ts runtime wrappers.
+
 import {
   G,
   setupCfg,
@@ -8,99 +11,459 @@ import {
   showWinState,
   cloneGameState,
   uiLog,
+  uiShowTrucoCallToast,
+  uiShowTrucoToast,
+  uiRenderGameFull,
+  uiShowEnvidoAnnouncement,
   TRUCO_LEVELS,
   teamOf,
+  envidoTotalIfAccepted,
+  envidoPointsIfRejected,
   animateCollapse,
   animateSweepTrick,
   dealCardsAnimated,
-  allSeats,
 } from './game';
-
-import {
-  showTrucoCallToast,
-  showTrucoToast,
-  showEnvidoAnnouncement,
-  renderGame,
-  renderArena,
-} from './ui';
 
 const STORAGE_KEY = 'qt-online-session';
 
 const session = {
-  roomId: '',
-  roomCode: '',
-  token: '',
-  seat: null,
-  socket: null,
-  connected: false,
+  roomId:         '',
+  roomCode:       '',
+  token:          '',
+  seat:           null,
+  socket:         null,
+  connected:      false,
   reconnectTimer: null,
   pendingRematch: false,
 };
 
-// ── State diffing: previous G snapshot ───────────────────────────
+// Snapshot of previous G — used for state diffing
 let _prevG = null;
+
+// ── Network ───────────────────────────────────────────────────────
 
 function onlineBase() {
   return 'https://quantum-truco-online.valentinreparaz.workers.dev';
 }
-
-function apiUrl(path) {
-  const base = onlineBase();
-  if (!base) return path;
-  return `${base.replace(/\/$/, '')}${path}`;
-}
-
+function apiUrl(path) { return `${onlineBase().replace(/\/$/, '')}${path}`; }
 function wsUrl(roomId, token) {
-  const base = onlineBase();
-  if (base) {
-    const u = new URL(base.replace(/\/$/, ''));
-    u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
-    u.pathname = `/api/rooms/connect/${roomId}`;
-    u.searchParams.set('token', token);
-    return u.toString();
-  }
-  const u = new URL(window.location.href);
+  const u = new URL(onlineBase().replace(/\/$/, ''));
   u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
   u.pathname = `/api/rooms/connect/${roomId}`;
   u.searchParams.set('token', token);
-  u.hash = '';
   return u.toString();
 }
 
 function persistSession() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    roomId: session.roomId,
-    roomCode: session.roomCode,
-    token: session.token,
-    seat: session.seat,
+    roomId: session.roomId, roomCode: session.roomCode,
+    token: session.token,  seat: session.seat,
   }));
 }
+function clearSessionStorage() { localStorage.removeItem(STORAGE_KEY); }
 
-function clearSessionStorage() {
-  localStorage.removeItem(STORAGE_KEY);
-}
+// ── DOM helpers ───────────────────────────────────────────────────
 
 function setStatus(text, cls = '') {
   const el = document.getElementById('online-status');
-  if (!el) return;
-  el.textContent = text || '';
-  el.className = `online-status ${cls}`.trim();
+  if (el) { el.textContent = text || ''; el.className = `online-status ${cls}`.trim(); }
 }
-
 function setHeaderStatus(text) {
   const el = document.getElementById('online-header-status');
   if (el) el.textContent = text || '';
 }
-
 function syncLeaveButton(show) {
   const btn = document.getElementById('btn-online-leave');
   if (btn) btn.style.display = show ? '' : 'none';
 }
-
 function updateSelectedMode() {
   document.querySelectorAll('.opt-btn[data-group="mode"]').forEach(b => b.classList.remove('selected'));
-  const online = document.querySelector('.opt-btn[data-group="mode"][data-val="online_1v1"]');
-  if (online) online.classList.add('selected');
+  const btn = document.querySelector('.opt-btn[data-group="mode"][data-val="online_1v1"]');
+  if (btn) btn.classList.add('selected');
+}
+
+// ── Log synthesis ─────────────────────────────────────────────────
+
+function synthesizeLog(prev, next) {
+  if (!prev) return;
+
+  // New hand
+  if (next.handNum !== prev.handNum) {
+    uiLog(`=== Mano ${next.handNum} · ${next.scores[0]}–${next.scores[1]} ===`, 'important');
+    uiLog(`✦ Es mano: ${next.players?.[next.manoSeat]?.name || '?'}`, 'important');
+    return;
+  }
+
+  // Card played (1st card of trick)
+  const prevPlays = Object.keys(prev.playsThisTrick || {}).map(Number);
+  const nextPlays = Object.keys(next.playsThisTrick || {}).map(Number);
+  for (const seat of nextPlays) {
+    if (!prevPlays.includes(seat))
+      uiLog(`${next.players?.[seat]?.name || '?'} juega carta cuántica`, 'collapse');
+  }
+
+  // Trick resolved: trickHistory grew
+  if (next.trickHistory.length > prev.trickHistory.length) {
+    const idx    = prev.trickHistory.length;
+    const winner = next.trickWinners[idx];
+    // Log each card that collapsed
+    const entry = next.trickHistory[idx] || [];
+    for (const {seat, card} of entry) {
+      uiLog(`⊗ ${next.players?.[seat]?.name || '?'}: ${card.rank} de ${card.suit}`, 'collapse');
+    }
+    if (winner === -1) uiLog(`Baza ${idx+1}: PARDA — sale el mano (${next.players?.[next.manoSeat]?.name || '?'})`, 'important');
+    else {
+      const winSeat = next.players?.find(p => teamOf(p.seat) === winner)?.seat;
+      uiLog(`Baza ${idx+1}: Equipo ${winner} · ${winSeat !== undefined ? next.players[winSeat]?.name : '?'}`, 'important');
+    }
+  }
+
+  // Also log if the 2nd card was played (i.e. prev had 1 card, next has trickHistory grown)
+  if (prevPlays.length === 1 && next.trickHistory.length > prev.trickHistory.length) {
+    // Find who played 2nd
+    const firstSeat  = prevPlays[0];
+    const entry      = next.trickHistory[prev.trickHistory.length] || [];
+    const secondEntry = entry.find(e => e.seat !== firstSeat);
+    if (secondEntry)
+      uiLog(`${next.players?.[secondEntry.seat]?.name || '?'} juega carta cuántica`, 'collapse');
+  }
+
+  // Truco sung
+  if (next.pendingChant?.type === 'truco' && prev.pendingChant?.type !== 'truco') {
+    const callerName = next.players?.[next.pendingChant.callerSeat]?.name || '?';
+    const levelName  = TRUCO_LEVELS[next.pendingChant.data?.level]?.name || 'Truco';
+    uiLog(`${callerName}: ¡${levelName}!`, 'important');
+    const phrases = {
+      'Truco':   ['¡Truco!','¡Ahí va el truco!','¡Trucoooo!'],
+      'Retruco': ['¡Retruco!','¡Mate y retruco!','¡Retruco, che!'],
+      'Vale 4':  ['¡Vale cuatro!','¡Vale cuatro, jugado!'],
+    };
+    const opts = phrases[levelName] || [`¡${levelName}!`];
+    uiShowTrucoCallToast(opts[Math.floor(Math.random() * opts.length)]);
+  }
+
+  // Truco raised
+  if (next.pendingChant?.type === 'truco' && prev.pendingChant?.type === 'truco'
+      && next.pendingChant.data?.level > prev.pendingChant.data?.level) {
+    const raiserName = next.players?.[next.pendingChant.callerSeat]?.name || '?';
+    uiLog(`${raiserName} sube a ${TRUCO_LEVELS[next.pendingChant.data?.level]?.name}!`, 'important');
+  }
+
+  // Truco accepted
+  if (next.bet.level > prev.bet.level && !next.pendingChant) {
+    const levelName  = TRUCO_LEVELS[next.bet.level]?.name || 'Truco';
+    const acceptSeat = next.players?.find(p => p.team !== next.bet.lastRaiserTeam)?.seat;
+    const acceptName = acceptSeat !== undefined ? next.players[acceptSeat]?.name : '?';
+    uiLog(`${acceptName} acepta ${levelName}. Vale ${TRUCO_LEVELS[next.bet.level]?.pts} pts.`, 'important');
+    uiShowTrucoToast(acceptName);
+  }
+
+  // Truco rejected (pending disappeared without bet rising, hand still going)
+  if (!next.pendingChant && prev.pendingChant?.type === 'truco'
+      && next.bet.level === prev.bet.level && next.trickHistory.length === prev.trickHistory.length) {
+    const { raiserTeam, level } = prev.pendingChant.data || {};
+    const respName = next.players?.[prev.pendingChant.responderSeat]?.name || '?';
+    uiLog(`${respName} rechaza. Eq ${raiserTeam} cobra ${TRUCO_LEVELS[(level??1)-1]?.pts} pts.`, 'points');
+  }
+
+  // Envido called / raised
+  if (next.chant.envido.calls.length > prev.chant.envido.calls.length) {
+    const call       = next.chant.envido.calls.at(-1);
+    const callerName = next.players?.[next.chant.envido.callerSeat]?.name || '?';
+    uiLog(`${callerName} canta ${call}.`, 'important');
+  }
+
+  // Envido resolved
+  if (next.chant.envido.resolved && !prev.chant.envido.resolved) {
+    if (next.chant.envido.accepted) uiLog('Envido aceptado.', 'points');
+    else uiLog(`Envido rechazado. Eq ${next.chant.envido.callerTeam} cobra pts.`, 'points');
+  }
+
+  // Flor
+  if (next.pendingChant?.type === 'flor' && prev.pendingChant?.type !== 'flor')
+    uiLog(`${next.players?.[next.pendingChant.callerSeat]?.name || '?'} canta Flor.`, 'important');
+
+  // Scores updated (hand finished)
+  if (next.scores[0] !== prev.scores[0] || next.scores[1] !== prev.scores[1]) {
+    const d0 = next.scores[0] - prev.scores[0];
+    const d1 = next.scores[1] - prev.scores[1];
+    uiLog(`=== Mano ${prev.handNum}: +${d0}/${d1} → Total ${next.scores[0]}–${next.scores[1]} ===`, 'important');
+  }
+}
+
+// ── Deal animation ────────────────────────────────────────────────
+
+function triggerDealAnimation(state) {
+  const overlay = document.createElement('div');
+  overlay.className = 'new-hand-overlay';
+  const manoName = state.players?.[state.manoSeat]?.name || '?';
+  overlay.innerHTML = `
+    <div class="new-hand-label">Mano ${state.handNum}</div>
+    <div class="new-hand-num">Partida a ${state.target} pts · ${state.scores[0]}–${state.scores[1]}</div>
+    <div class="mano-indicator">✦ Es mano: ${manoName} ✦</div>`;
+  document.body.appendChild(overlay);
+  renderCurrentGame(); // update header + action panel
+
+  setTimeout(() => {
+    overlay.remove();
+    // dealCardsAnimated reads G.viewerSeat in online mode (patched in game.ts)
+    dealCardsAnimated(() => renderCurrentGame());
+  }, 2500);
+}
+
+// ── Collapse animation for online ─────────────────────────────────
+// Problem: server resolves trick synchronously → by the time client receives state,
+// playsThisTrick is already {} (cleared by nextTrick).
+// Solution: reconstruct playsThisTrick from players[seat].played (which keeps full
+// quantum cards including options and collapsedTo) and trickHistory for seat order.
+
+function runCollapseAnimation(state, prevState, onDone) {
+  if (typeof document === 'undefined') { onDone(); return; }
+
+  const lastEntry = state.trickHistory[state.trickHistory.length - 1];
+  if (!lastEntry || lastEntry.length < 2) { onDone(); return; }
+
+  // Reconstruct playsThisTrick from players[seat].played (last played card per seat)
+  // filterStateForSeat does NOT hide played[], so opponent's played cards are visible.
+  const reconstructed = {};
+  const seatOrder = lastEntry.map(e => e.seat); // preserves original playOrder
+
+  for (const { seat, card } of lastEntry) {
+    const p       = state.players[seat];
+    const played  = p?.played || [];
+    // Find the played card that matches the collapsed card
+    const qc = played.find(q => q.collapsedTo && q.collapsedTo.rank === card.rank && q.collapsedTo.suit === card.suit)
+            ?? played[played.length - 1]; // fallback: last played
+
+    if (qc && qc.options && qc.options.length === 2) {
+      reconstructed[seat] = { ...qc }; // full quantum card with options + collapsedTo
+    }
+  }
+
+  if (Object.keys(reconstructed).length < 2) {
+    // Can't animate — just render final state
+    onDone();
+    return;
+  }
+
+  // Temporarily restore playsThisTrick and playOrder so renderArena + animateCollapse work
+  const savedPlaysThisTrick = G.playsThisTrick;
+  const savedPlayOrder      = G.playOrder;
+  const savedTrickIdx       = G.trickIdx;
+  const savedPhase          = G.phase;
+
+  // Set up animation state: playOrder from last trick, trickIdx = last trick
+  G.playOrder      = seatOrder;
+  G.playsThisTrick = {};
+  // Temporarily null out collapsedTo so arena shows entangled cards
+  for (const [seat, qc] of Object.entries(reconstructed)) {
+    G.playsThisTrick[seat] = { ...qc, collapsedTo: null };
+  }
+  G.phase = 'collapsing';
+  uiRenderGameFull(); // shows entangled cards in arena with ⊗ glow
+
+  // Restore collapsedTo so animateCollapse can show the flip
+  for (const [seat, qc] of Object.entries(reconstructed)) {
+    G.playsThisTrick[seat].collapsedTo = qc.collapsedTo;
+  }
+
+  // Run the collapse animation
+  setTimeout(() => {
+    animateCollapse(() => {
+      // Restore everything
+      G.playsThisTrick = savedPlaysThisTrick;
+      G.playOrder      = savedPlayOrder;
+      G.trickIdx       = savedTrickIdx;
+      G.phase          = savedPhase;
+      onDone();
+    });
+  }, 800); // small pause so player sees entangled state
+}
+
+// ── Envido announcement ───────────────────────────────────────────
+
+function maybeShowEnvidoDialog(prev, next) {
+  if (!next.chant.envido.resolved || !next.chant.envido.accepted) return;
+  if (prev && prev.chant.envido.resolved) return; // already shown
+
+  // Build finalCards from players[].played (collapsed)
+  const finalCards = {};
+  for (const p of next.players) {
+    finalCards[p.seat] = p.played.map(q => q.collapsedTo).filter(Boolean);
+    // If played is empty (cards not collapsed yet), use hand's visible card
+    if (!finalCards[p.seat].length) {
+      finalCards[p.seat] = p.hand.map(q => q.collapsedTo).filter(Boolean);
+    }
+  }
+
+  const pts = envidoTotalIfAccepted(
+    next.chant.envido.calls,
+    next.chant.envido.callerTeam,
+    next.target,
+    next.scores
+  );
+
+  // Build minimal res object that showEnvidoAnnouncement expects
+  const teamScores = { 0: 0, 1: 0 };
+  for (const p of next.players) {
+    if (finalCards[p.seat]?.length) {
+      const s = finalCards[p.seat].reduce((best, c) => {
+        // Simple max envidoValue
+        return best; // showEnvidoAnnouncement will compute it internally
+      }, 0);
+      teamScores[p.team] = Math.max(teamScores[p.team], 0);
+    }
+  }
+  const winner = next.handScore[0] > next.handScore[1] ? 0 : 1;
+  const res = { winner, teamScores };
+
+  uiShowEnvidoAnnouncement(res, pts, finalCards);
+}
+
+// ── Main state installer ──────────────────────────────────────────
+
+function installStateEnvelope(envelope) {
+  const state = envelope.state;
+  if (!state) return;
+
+  // Capture previous state BEFORE installing new one
+  const prevState = _prevG ? cloneGameState(_prevG) : null;
+
+  // Annotate with online session metadata
+  state.onlineMode        = true;
+  state.viewerSeat        = session.seat;
+  state.roomCode          = session.roomCode;
+  state.roomId            = session.roomId;
+  state.statusText        = envelope.statusText || '';
+  state.opponentConnected = envelope.opponentConnected;
+  state.roomReady         = envelope.roomReady;
+
+  // Install → G = state
+  installOnlineState(state);
+
+  // Save snapshot of what was just installed (deep clone)
+  _prevG = cloneGameState(state);
+
+  setHeaderStatus(envelope.statusText || 'En línea');
+  syncLeaveButton(true);
+
+  if (state.matchEnded) {
+    const wt   = state.winnerTeam ?? 0;
+    const name = state.winnerName || state.players?.[wt === 0 ? 0 : 1]?.name || 'Ganador';
+    showWinState(`¡${String(name).toUpperCase()} GANA!`, '', `${state.scores[0]} — ${state.scores[1]}`);
+    showScreenById('screen-win');
+    return;
+  }
+
+  showScreenById('screen-game');
+  synthesizeLog(prevState, state);
+
+  // ── First connection ever: deal animation ─────────────────────
+  if (!prevState) {
+    triggerDealAnimation(state);
+    return;
+  }
+
+  // ── New hand: deal animation ──────────────────────────────────
+  if (state.handNum !== prevState.handNum) {
+    triggerDealAnimation(state);
+    return;
+  }
+
+  // ── Trick just resolved: collapse + sweep ─────────────────────
+  // Detected by trickHistory growing (works even after playsThisTrick is cleared)
+  const trickJustResolved = state.trickHistory.length > prevState.trickHistory.length;
+
+  if (trickJustResolved) {
+    runCollapseAnimation(state, prevState, () => {
+      renderCurrentGame();
+      // Sweep then render next tick
+      const isHandOver = state.phase === 'hand_end';
+      if (!isHandOver) {
+        setTimeout(() => animateSweepTrick(() => renderCurrentGame()), 2000);
+      }
+    });
+    return;
+  }
+
+  // ── Envido resolved: show announcement ───────────────────────
+  if (state.chant?.envido?.resolved && !prevState.chant?.envido?.resolved && state.chant.envido.accepted) {
+    maybeShowEnvidoDialog(prevState, state);
+    renderCurrentGame();
+    return;
+  }
+
+  // ── Card played (1st card): drop animation ────────────────────
+  const prevCount = Object.keys(prevState.playsThisTrick || {}).length;
+  const nextCount = Object.keys(state.playsThisTrick  || {}).length;
+  if (nextCount > prevCount) {
+    renderCurrentGame();
+    setTimeout(() => {
+      const slots = document.querySelectorAll('#arena-slots .arena-slot');
+      const last  = slots[slots.length - 1];
+      if (last) { last.classList.add('dropping'); setTimeout(() => last.classList.remove('dropping'), 600); }
+    }, 30);
+    return;
+  }
+
+  // ── Default ───────────────────────────────────────────────────
+  renderCurrentGame();
+}
+
+// ── WebSocket ─────────────────────────────────────────────────────
+
+function handleMessage(payload) {
+  if (!payload || typeof payload !== 'object') return;
+  switch (payload.type) {
+    case 'room_waiting':
+      setupCfg.mode = 'online_1v1'; _prevG = null;
+      setStatus(`Sala ${payload.roomCode}: esperando rival…`, 'warn');
+      setHeaderStatus(`Sala ${payload.roomCode}`);
+      syncLeaveButton(false); showScreenById('screen-setup'); return;
+    case 'action_rejected':
+      setStatus(payload.error || 'Acción rechazada.', 'err'); return;
+    case 'rematch_waiting':
+      setStatus(payload.statusText || 'Esperando revancha…', 'warn');
+      setHeaderStatus(payload.statusText || ''); return;
+    case 'room_closed':
+      setStatus(payload.statusText || 'La sala se cerró.', 'err');
+      leaveOnlineRoom(false); return;
+    case 'room_state': case 'presence_update':
+      installStateEnvelope(payload);
+      if (payload.statusText) setStatus(payload.statusText, payload.opponentConnected === false ? 'warn' : 'ok');
+      return;
+  }
+}
+
+function scheduleReconnect() {
+  if (!session.roomId || !session.token || session.reconnectTimer) return;
+  session.reconnectTimer = window.setTimeout(() => { session.reconnectTimer = null; connectSocket(); }, 1500);
+}
+
+function connectSocket() {
+  if (!session.roomId || !session.token) return;
+  if (session.socket && (session.socket.readyState === WebSocket.OPEN || session.socket.readyState === WebSocket.CONNECTING)) return;
+  const sock = new WebSocket(wsUrl(session.roomId, session.token));
+  session.socket = sock;
+  setStatus(`Conectando a la sala ${session.roomCode}…`, 'warn');
+  sock.addEventListener('open', () => {
+    session.connected = true;
+    setStatus(`Conectado a la sala ${session.roomCode}.`, 'ok');
+    setHeaderStatus(`Sala ${session.roomCode}`);
+    persistSession();
+  });
+  sock.addEventListener('message', ev => { try { handleMessage(JSON.parse(ev.data)); } catch (e) { console.error('[ws]', e); } });
+  const onDisc = () => {
+    session.connected = false;
+    if (!session.roomId) return;
+    setStatus(`Conexión perdida. Reintentando…`, 'warn'); setHeaderStatus('Reconectando…'); scheduleReconnect();
+  };
+  sock.addEventListener('close', onDisc); sock.addEventListener('error', onDisc);
+}
+
+function sendAction(msg) {
+  if (!session.socket || session.socket.readyState !== WebSocket.OPEN) { setStatus('Sin conexión.', 'err'); return; }
+  session.socket.send(JSON.stringify(msg));
 }
 
 function restoreSession() {
@@ -109,474 +472,74 @@ function restoreSession() {
     if (!raw) return false;
     const saved = JSON.parse(raw);
     if (!saved?.roomId || !saved?.token) return false;
-    session.roomId = saved.roomId;
-    session.roomCode = saved.roomCode || saved.roomId;
-    session.token = saved.token;
-    session.seat = saved.seat;
+    Object.assign(session, { roomId: saved.roomId, roomCode: saved.roomCode || saved.roomId, token: saved.token, seat: saved.seat });
     setupCfg.mode = 'online_1v1';
     updateSelectedMode();
     setStatus(`Reconectando a la sala ${session.roomCode}…`, 'warn');
-    connectSocket();
-    return true;
-  } catch {
-    return false;
-  }
+    connectSocket(); return true;
+  } catch { return false; }
 }
 
-async function postJson(path, body) {
-  const res = await fetch(apiUrl(path), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body || {}),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-  return data;
-}
+// ── Public exports ────────────────────────────────────────────────
 
-// ── State diff: synthesize all visual effects from what changed ───
+export function isOnlineClientMode() { return setupCfg.mode === 'online_1v1' || !!session.roomId; }
 
-function synthesizeLog(prev, next) {
-  if (!prev) return;
-  const viewSeat = session.seat ?? 0;
-
-  // New hand started
-  if (next.handNum > prev.handNum) {
-    uiLog(`=== Mano ${next.handNum} · ${next.scores[0]}–${next.scores[1]} ===`, 'important');
-    const manoName = next.players[next.manoSeat]?.name || '?';
-    uiLog(`✦ Es mano: ${manoName}`, 'important');
-    return; // rest of log will follow after actions
-  }
-
-  // Cards played this tick
-  const prevSeats = new Set(Object.keys(prev.playsThisTrick || {}).map(Number));
-  const nextSeats = new Set(Object.keys(next.playsThisTrick || {}).map(Number));
-  for (const seat of nextSeats) {
-    if (!prevSeats.has(seat)) {
-      const name = next.players[seat]?.name || `Jugador ${seat + 1}`;
-      uiLog(`${name} juega carta cuántica`, 'collapse');
-    }
-  }
-
-  // Trick just resolved — trickWinners grew
-  if (next.trickWinners.length > prev.trickWinners.length) {
-    const idx    = prev.trickWinners.length;
-    const winner = next.trickWinners[idx];
-    if (winner === -1) {
-      const manoName = next.players[next.manoSeat]?.name || '?';
-      uiLog(`Baza ${idx + 1}: PARDA — sale el mano (${manoName})`, 'important');
-    } else {
-      // Find winning seat
-      const winSeat = next.players.find(p => teamOf(p.seat) === winner)?.seat;
-      const winName = winSeat !== undefined ? next.players[winSeat]?.name : `Eq ${winner}`;
-      uiLog(`Baza ${idx + 1}: Equipo ${winner} · ${winName}`, 'important');
-    }
-    // Collapse log: show what each card collapsed to
-    for (const [seatStr, qc] of Object.entries(next.playsThisTrick || {})) {
-      if (qc?.collapsedTo && prev.playsThisTrick?.[seatStr]?.collapsedTo === null) {
-        const name = next.players[parseInt(seatStr)]?.name || '?';
-        uiLog(`⊗ ${name}: ${qc.collapsedTo.rank} de ${qc.collapsedTo.suit}`, 'collapse');
-      }
-    }
-  }
-
-  // Truco sung / accepted
-  const prevPending = prev.pendingChant;
-  const nextPending = next.pendingChant;
-
-  // New truco pending (someone just sang)
-  if (nextPending?.type === 'truco' && prevPending?.type !== 'truco') {
-    const callerName = next.players[nextPending.callerSeat]?.name || '?';
-    const levelName  = TRUCO_LEVELS[nextPending.data?.level]?.name || 'Truco';
-    uiLog(`${callerName}: ¡${levelName}!`, 'important');
-    const phrases = {
-      'Truco':   ['¡Truco!', '¡Ahí va el truco!', '¡Trucoooo!'],
-      'Retruco': ['¡Retruco!', '¡Mate y retruco!'],
-      'Vale 4':  ['¡Vale cuatro!', '¡Vale cuatro, jugado!'],
-    };
-    const opts = phrases[levelName] || [`¡${levelName}!`];
-    const phrase = opts[Math.floor(Math.random() * opts.length)];
-    if (showTrucoCallToast) showTrucoCallToast(phrase);
-  }
-
-  // Truco accepted (bet.level went up, no pending truco now)
-  if (next.bet.level > prev.bet.level && !nextPending) {
-    const levelName   = TRUCO_LEVELS[next.bet.level]?.name || 'Truco';
-    const raiserTeam  = next.bet.lastRaiserTeam;
-    // The accepter is the opponent of the raiser
-    const acceptSeat  = next.players.find(p => p.team !== raiserTeam)?.seat;
-    const acceptName  = acceptSeat !== undefined ? next.players[acceptSeat]?.name : '?';
-    const pts         = TRUCO_LEVELS[next.bet.level]?.pts || 2;
-    uiLog(`${acceptName} acepta ${levelName}. Vale ${pts} pts.`, 'important');
-    if (showTrucoToast) showTrucoToast(acceptName);
-  }
-
-  // Truco rejected (hand ended, bet level didn't increase)
-  if (!next.pendingChant && prev.pendingChant?.type === 'truco' && next.bet.level === prev.bet.level) {
-    const { raiserTeam, level } = prev.pendingChant.data || {};
-    const respSeat = prev.pendingChant.responderSeat;
-    const respName = next.players[respSeat]?.name || '?';
-    const pts      = TRUCO_LEVELS[level - 1]?.pts || 1;
-    uiLog(`${respName} rechaza. Eq ${raiserTeam} cobra ${pts} pts.`, 'points');
-  }
-
-  // Envido called / raised
-  if (next.chant.envido.calls.length > prev.chant.envido.calls.length) {
-    const call       = next.chant.envido.calls[next.chant.envido.calls.length - 1];
-    const callerSeat = next.chant.envido.callerSeat;
-    const callerName = next.players[callerSeat]?.name || '?';
-    uiLog(`${callerName} canta ${call}.`, 'important');
-  }
-
-  // Envido resolved
-  if (next.chant.envido.resolved && !prev.chant.envido.resolved) {
-    if (next.chant.envido.accepted) {
-      uiLog(`Envido resuelto.`, 'points');
-    } else {
-      const callerTeam = next.chant.envido.callerTeam;
-      uiLog(`Envido rechazado. Eq ${callerTeam} cobra pts.`, 'points');
-    }
-  }
-
-  // Flor
-  if (nextPending?.type === 'flor' && prevPending?.type !== 'flor') {
-    const callerName = next.players[nextPending.callerSeat]?.name || '?';
-    uiLog(`${callerName} canta Flor.`, 'important');
-  }
-
-  // Scores changed (hand ended)
-  if (next.scores[0] !== prev.scores[0] || next.scores[1] !== prev.scores[1]) {
-    const d0 = next.scores[0] - prev.scores[0];
-    const d1 = next.scores[1] - prev.scores[1];
-    uiLog(`=== Mano ${prev.handNum}: +${d0}/${d1} → Total ${next.scores[0]}–${next.scores[1]} ===`, 'important');
-  }
-}
-
-// ── Animate the trick resolution for online ───────────────────────
-// prev.playsThisTrick has the cards with options (entangled)
-// next.playsThisTrick has the same cards with collapsedTo set
-// We render entangled state, run collapse animation, then update
-
-function animateOnlineTrick(prevState, nextState, onDone) {
-  if (typeof document === 'undefined') { onDone(); return; }
-
-  // 1. Set G to a hybrid: next state but with prev (uncollapsed) playsThisTrick
-  //    so renderArena shows entangled cards
-  const savedPlays  = nextState.playsThisTrick;
-  const savedPhase  = nextState.phase;
-  const savedTrickW = nextState.trickWinners;
-
-  nextState.playsThisTrick = prevState.playsThisTrick;
-  nextState.phase = 'collapsing';
-  nextState.trickWinners = prevState.trickWinners;
-  renderGame();
-
-  // 2. Restore collapsed state in G (animateCollapse reads G.playsThisTrick[seat].collapsedTo)
-  nextState.playsThisTrick = savedPlays;
-  nextState.trickWinners   = savedTrickW;
-
-  // 3. Run collapse animation (reads G.playsThisTrick for collapsedTo)
-  setTimeout(() => {
-    animateCollapse(() => {
-      // 4. Restore phase and render final state
-      nextState.phase = savedPhase;
-      onDone();
-    });
-  }, 400);
-}
-
-// ── Main envelope handler ─────────────────────────────────────────
-
-function installStateEnvelope(envelope) {
-  const state = envelope.state;
-  if (!state) return;
-
-  // Save previous state snapshot before installing new one
-  const prevState = _prevG ? cloneGameState(_prevG) : null;
-
-  // Prepare state metadata
-  state.onlineMode    = true;
-  state.viewerSeat    = session.seat;
-  state.roomCode      = session.roomCode;
-  state.roomId        = session.roomId;
-  state.statusText    = envelope.statusText || '';
-  state.opponentConnected = envelope.opponentConnected;
-  state.roomReady     = envelope.roomReady;
-
-  // Install state (sets G = state)
-  installOnlineState(state);
-  _prevG = cloneGameState(state);
-
-  setHeaderStatus(envelope.statusText || 'En línea');
-  syncLeaveButton(true);
-
-  if (state.matchEnded) {
-    const winnerTeam = state.winnerTeam ?? 0;
-    const winnerName = state.winnerName || state.players?.[winnerTeam === 0 ? 0 : 1]?.name || 'Ganador';
-    showWinState(`¡${String(winnerName).toUpperCase()} GANA!`, '', `${state.scores[0]} — ${state.scores[1]}`);
-    showScreenById('screen-win');
-    return;
-  }
-
-  showScreenById('screen-game');
-
-  // Synthesize log from state diff
-  synthesizeLog(prevState, state);
-
-  if (!prevState) {
-    // First state: just render, trigger deal animation if needed
-    renderCurrentGame();
-    return;
-  }
-
-  // ── New hand: trigger deal animation ─────────────────────────
-  if (state.handNum > prevState.handNum) {
-    const overlay = document.createElement('div');
-    overlay.className = 'new-hand-overlay';
-    const manoName = state.players[state.manoSeat]?.name || '?';
-    overlay.innerHTML = `
-      <div class="new-hand-label">Mano ${state.handNum}</div>
-      <div class="new-hand-num">Partida a ${state.target} pts · ${state.scores[0]}–${state.scores[1]}</div>
-      <div class="mano-indicator">✦ Es mano: ${manoName} ✦</div>`;
-    document.body.appendChild(overlay);
-    renderCurrentGame(); // renders header + action panel
-    setTimeout(() => {
-      overlay.remove();
-      dealCardsAnimated(() => renderCurrentGame());
-    }, 2500);
-    return;
-  }
-
-  // ── Trick just resolved: animate collapse ─────────────────────
-  const trickJustResolved = state.trickWinners.length > prevState.trickWinners.length
-    && Object.keys(prevState.playsThisTrick || {}).length > 0;
-
-  if (trickJustResolved) {
-    animateOnlineTrick(prevState, state, () => {
-      renderCurrentGame();
-
-      // Sweep cards after a pause, then render next trick state
-      if (state.phase === 'baza_end' || state.phase === 'chant' || state.phase === 'play') {
-        setTimeout(() => {
-          animateSweepTrick(() => renderCurrentGame());
-        }, 2200);
-      }
-    });
-    return;
-  }
-
-  // ── Card played: animate card drop in arena ───────────────────
-  const prevPlayCount = Object.keys(prevState.playsThisTrick || {}).length;
-  const nextPlayCount = Object.keys(state.playsThisTrick || {}).length;
-  if (nextPlayCount > prevPlayCount) {
-    renderCurrentGame();
-    // Animate the new card slot in arena with a drop effect
-    setTimeout(() => {
-      const slots = document.querySelectorAll('#arena-slots .arena-slot');
-      const lastSlot = slots[slots.length - 1];
-      if (lastSlot) {
-        lastSlot.classList.add('dropping');
-        setTimeout(() => lastSlot.classList.remove('dropping'), 600);
-      }
-    }, 30);
-    return;
-  }
-
-  // ── Envido resolved: show announcement ───────────────────────
-  if (state.chant.envido.resolved && !prevState.chant.envido.resolved && state.chant.envido.accepted) {
-    renderCurrentGame();
-    // Build finalCards for announcement from trickHistory + current hands
-    // (server already settled it in handScore, we just show it)
-    // For simplicity show the overlay without detailed scores — the log has them
-    return;
-  }
-
-  // ── Default: just render ──────────────────────────────────────
-  renderCurrentGame();
-}
-
-function handleMessage(payload) {
-  if (!payload || typeof payload !== 'object') return;
-
-  if (payload.type === 'room_waiting') {
-    setupCfg.mode = 'online_1v1';
-    _prevG = null;
-    setStatus(`Sala ${payload.roomCode}: esperando rival…`, 'warn');
-    setHeaderStatus(`Sala ${payload.roomCode}`);
-    syncLeaveButton(false);
-    showScreenById('screen-setup');
-    return;
-  }
-
-  if (payload.type === 'action_rejected') {
-    setStatus(payload.error || 'Acción rechazada.', 'err');
-    setHeaderStatus(payload.error || 'Acción rechazada');
-    return;
-  }
-
-  if (payload.type === 'rematch_waiting') {
-    setStatus(payload.statusText || 'Esperando revancha…', 'warn');
-    setHeaderStatus(payload.statusText || 'Esperando revancha');
-    return;
-  }
-
-  if (payload.type === 'room_closed') {
-    setStatus(payload.statusText || 'La sala se cerró.', 'err');
-    leaveOnlineRoom(false);
-    return;
-  }
-
-  if (payload.type === 'room_state' || payload.type === 'presence_update') {
-    installStateEnvelope(payload);
-    if (payload.statusText) setStatus(payload.statusText, payload.opponentConnected === false ? 'warn' : 'ok');
-  }
-}
-
-function scheduleReconnect() {
-  if (!session.roomId || !session.token || session.reconnectTimer) return;
-  session.reconnectTimer = window.setTimeout(() => {
-    session.reconnectTimer = null;
-    connectSocket();
-  }, 1500);
-}
-
-function connectSocket() {
-  if (!session.roomId || !session.token) return;
-  if (session.socket && (session.socket.readyState === WebSocket.OPEN || session.socket.readyState === WebSocket.CONNECTING)) return;
-
-  const sock = new WebSocket(wsUrl(session.roomId, session.token));
-  session.socket = sock;
-  setStatus(`Conectando a la sala ${session.roomCode}…`, 'warn');
-
-  sock.addEventListener('open', () => {
-    session.connected = true;
-    setStatus(`Conectado a la sala ${session.roomCode}.`, 'ok');
-    setHeaderStatus(`Sala ${session.roomCode}`);
-    persistSession();
-  });
-
-  sock.addEventListener('message', (ev) => {
-    try {
-      handleMessage(JSON.parse(ev.data));
-    } catch (err) {
-      console.error(err);
-    }
-  });
-
-  const onDisconnect = () => {
-    session.connected = false;
-    if (!session.roomId) return;
-    setStatus(`Conexión perdida con la sala ${session.roomCode}. Reintentando…`, 'warn');
-    setHeaderStatus('Reconectando…');
-    scheduleReconnect();
-  };
-
-  sock.addEventListener('close', onDisconnect);
-  sock.addEventListener('error', onDisconnect);
-}
-
-function sendAction(message) {
-  if (!session.socket || session.socket.readyState !== WebSocket.OPEN) {
-    setStatus('No hay conexión activa con la sala.', 'err');
-    return;
-  }
-  session.socket.send(JSON.stringify(message));
-}
-
-export function isOnlineClientMode() {
-  return setupCfg.mode === 'online_1v1' || !!session.roomId;
-}
-
-export function bootstrapOnlineUi() {
-  syncLeaveButton(false);
-  restoreSession();
-}
+export function bootstrapOnlineUi() { syncLeaveButton(false); restoreSession(); }
 
 export async function createOnlineRoomFromUI() {
-  setupCfg.mode = 'online_1v1';
-  _prevG = null;
+  setupCfg.mode = 'online_1v1'; _prevG = null;
   try {
-    const data = await postJson('/api/rooms/create', {
-      target: setupCfg.target,
-      conFlor: !!setupCfg.conFlor,
-    });
-    session.roomId = data.roomId;
-    session.roomCode = data.roomCode;
-    session.token = data.token;
-    session.seat = data.seat;
-    session.pendingRematch = false;
+    const res  = await fetch(apiUrl('/api/rooms/create'), { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ target: setupCfg.target, conFlor: !!setupCfg.conFlor }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+    Object.assign(session, { roomId: data.roomId, roomCode: data.roomCode, token: data.token, seat: data.seat, pendingRematch: false });
     persistSession();
     const input = document.getElementById('room-code-input');
     if (input) input.value = data.roomCode;
-    setStatus(`Sala ${data.roomCode} creada. Compartí el código y esperá al rival.`, 'ok');
+    setStatus(`Sala ${data.roomCode} creada. Compartí el código.`, 'ok');
     connectSocket();
-  } catch (err) {
-    setStatus(err?.message || 'No se pudo crear la sala.', 'err');
-  }
+  } catch (err) { setStatus(err?.message || 'Error al crear sala.', 'err'); }
 }
 
 export async function joinOnlineRoomFromUI() {
-  setupCfg.mode = 'online_1v1';
-  _prevG = null;
-  const input = document.getElementById('room-code-input');
+  setupCfg.mode = 'online_1v1'; _prevG = null;
+  const input    = document.getElementById('room-code-input');
   const roomCode = String(input?.value || '').trim().toUpperCase();
-  if (!roomCode) {
-    setStatus('Ingresá un código de sala.', 'err');
-    return;
-  }
+  if (!roomCode) { setStatus('Ingresá un código de sala.', 'err'); return; }
   try {
-    const data = await postJson('/api/rooms/join', { roomCode });
-    session.roomId = data.roomId;
-    session.roomCode = data.roomCode;
-    session.token = data.token;
-    session.seat = data.seat;
-    session.pendingRematch = false;
+    const res  = await fetch(apiUrl('/api/rooms/join'), { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ roomCode }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+    Object.assign(session, { roomId: data.roomId, roomCode: data.roomCode, token: data.token, seat: data.seat, pendingRematch: false });
     persistSession();
     setStatus(`Te uniste a la sala ${data.roomCode}.`, 'ok');
     connectSocket();
-  } catch (err) {
-    setStatus(err?.message || 'No se pudo entrar a la sala.', 'err');
-  }
+  } catch (err) { setStatus(err?.message || 'Error al unirse.', 'err'); }
 }
 
 export function leaveOnlineRoom(sendLeave = true) {
-  if (sendLeave && session.socket && session.socket.readyState === WebSocket.OPEN) {
-    try { session.socket.send(JSON.stringify({ type: 'leave_room' })); } catch {}
-  }
+  if (sendLeave && session.socket?.readyState === WebSocket.OPEN) try { session.socket.send(JSON.stringify({ type: 'leave_room' })); } catch {}
   try { session.socket?.close(); } catch {}
-  session.roomId = '';
-  session.roomCode = '';
-  session.token = '';
-  session.seat = null;
-  session.socket = null;
-  session.connected = false;
-  session.pendingRematch = false;
+  Object.assign(session, { roomId:'', roomCode:'', token:'', seat:null, socket:null, connected:false, pendingRematch:false });
   _prevG = null;
-  if (session.reconnectTimer) {
-    clearTimeout(session.reconnectTimer);
-    session.reconnectTimer = null;
-  }
-  clearSessionStorage();
-  setHeaderStatus('');
-  syncLeaveButton(false);
-  setStatus('Fuera de la sala.', '');
-  showScreenById('screen-setup');
+  if (session.reconnectTimer) { clearTimeout(session.reconnectTimer); session.reconnectTimer = null; }
+  clearSessionStorage(); setHeaderStatus(''); syncLeaveButton(false);
+  setStatus('Fuera de la sala.', ''); showScreenById('screen-setup');
 }
 
 export function requestOnlineRematch() {
   if (!isOnlineClientMode()) return;
-  session.pendingRematch = true;
-  _prevG = null;
+  session.pendingRematch = true; _prevG = null;
   setStatus('Pediste revancha. Esperando al rival…', 'warn');
   sendAction({ type: 'request_rematch' });
 }
 
-export function sendPlayCard(cardIndex)     { sendAction({ type: 'play_card', cardIndex }); }
-export function sendSingTruco()             { sendAction({ type: 'sing_truco' }); }
-export function sendRespondTruco(accept)    { sendAction({ type: 'respond_truco', action: accept ? 'accept' : 'reject' }); }
-export function sendRaiseTruco()            { sendAction({ type: 'raise_truco' }); }
-export function sendInitiateEnvido(call)    { sendAction({ type: 'initiate_envido', call }); }
-export function sendRespondEnvido(action)   { sendAction({ type: 'respond_envido', action }); }
-export function sendSingFlor()              { sendAction({ type: 'sing_flor' }); }
-export function sendRespondFlor(action)     { sendAction({ type: 'respond_flor', action }); }
-export function sendGoToMazo()              { sendAction({ type: 'go_to_mazo' }); }
+export function sendPlayCard(cardIndex)    { sendAction({ type: 'play_card', cardIndex }); }
+export function sendSingTruco()            { sendAction({ type: 'sing_truco' }); }
+export function sendRespondTruco(accept)   { sendAction({ type: 'respond_truco', action: accept ? 'accept' : 'reject' }); }
+export function sendRaiseTruco()           { sendAction({ type: 'raise_truco' }); }
+export function sendInitiateEnvido(call)   { sendAction({ type: 'initiate_envido', call }); }
+export function sendRespondEnvido(action)  { sendAction({ type: 'respond_envido', action }); }
+export function sendSingFlor()             { sendAction({ type: 'sing_flor' }); }
+export function sendRespondFlor(action)    { sendAction({ type: 'respond_flor', action }); }
+export function sendGoToMazo()             { sendAction({ type: 'go_to_mazo' }); }

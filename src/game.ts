@@ -1338,7 +1338,7 @@ export function dealCardsAnimated(onDone) {
   const infoEl = document.getElementById('envido-info');
   if (infoEl) infoEl.innerHTML = '';
 
-  const humanSeat = (G.aiSeat !== null) ? 0 : G.activeSeat;
+  const humanSeat = G.onlineMode ? (G.viewerSeat ?? G.activeSeat) : (G.aiSeat !== null) ? 0 : G.activeSeat;
   const p     = G.players[humanSeat];
   const scale = G.tableSize > 2 ? 0.795 : 0.925;
 
@@ -1437,5 +1437,13 @@ export function validateIntentActor(seat, type) {
 export function getOppSeat(seat) {
   return allSeats().find(s => teamOf(s) !== teamOf(seat)) ?? (1 - seat);
 }
+
+
+// ── Runtime UI wrappers (used by online.ts to avoid circular imports) ────────
+export function uiShowTrucoCallToast(phrase) { if (runtime.showTrucoCallToast) runtime.showTrucoCallToast(phrase); }
+export function uiShowTrucoToast(name)        { if (runtime.showTrucoToast) runtime.showTrucoToast(name); }
+export function uiRenderGameFull()            { if (runtime.renderGame) runtime.renderGame(); }
+export function uiRenderArenaOnly()           { if (runtime.renderArena) runtime.renderArena(); }
+export function uiShowEnvidoAnnouncement(res, pts, finalCards) { if (runtime.showEnvidoAnnouncement) runtime.showEnvidoAnnouncement(res, pts, finalCards); }
 
 // ── modal ────────────────────────────────────────────────────
