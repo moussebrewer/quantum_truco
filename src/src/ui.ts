@@ -578,7 +578,56 @@ function getViewerSeatForRender() {
 }
 
 function dispatchPlayCard(handIdx) {
-  if (G?.onlineMode) return sendPlayCard(handIdx);
+  if (G?.onlineMode) {
+    // Fly animation: move card ghost from hand to arena center before server responds
+    const FLY      = 620;
+    const cScale   = G.tableSize > 2 ? 0.62 : 0.76;
+    const srcScale = G.tableSize > 2 ? 0.795 : 0.925;
+    const handWraps = document.querySelectorAll('#hand-row .hand-card-wrap');
+    const srcEl     = handWraps[handIdx];
+    const srcSvg    = srcEl?.querySelector('svg');
+    const ghostSvg  = srcSvg ? srcSvg.cloneNode(true) : null;
+    const srcRect   = srcEl?.getBoundingClientRect();
+
+    if (srcRect && ghostSvg) {
+      // Destination: center of arena-slots
+      const arenaEl  = document.getElementById('arena-slots');
+      const arenaRect = arenaEl?.getBoundingClientRect();
+      const srcCX    = srcRect.left + srcRect.width  / 2;
+      const srcCY    = srcRect.top  + srcRect.height / 2;
+      const destCX   = arenaRect ? arenaRect.left + arenaRect.width  / 2 : window.innerWidth  / 2;
+      const destCY   = arenaRect ? arenaRect.top  + arenaRect.height / 2 : window.innerHeight * 0.38;
+
+      const ghost = document.createElement('div');
+      ghost.style.cssText = `position:fixed;pointer-events:none;z-index:600;
+        left:${srcCX}px;top:${srcCY}px;
+        transform:translate(-50%,-50%) scale(${srcScale});
+        transition:none;
+        filter:drop-shadow(0 10px 28px rgba(0,0,0,0.75));`;
+      ghost.appendChild(ghostSvg);
+      document.body.appendChild(ghost);
+
+      // Hide the source card wrap immediately
+      if (srcEl) { srcEl.style.opacity = '0'; srcEl.style.transition = 'opacity 0.12s'; }
+
+      ghost.getBoundingClientRect(); // force reflow
+      ghost.style.transition = `left ${FLY}ms cubic-bezier(0.25,0.1,0.2,1),
+        top ${FLY}ms cubic-bezier(0.35,0,0.15,1),
+        transform ${FLY}ms cubic-bezier(0.25,0.1,0.2,1),
+        filter ${FLY}ms ease`;
+      ghost.style.left      = `${destCX}px`;
+      ghost.style.top       = `${destCY}px`;
+      ghost.style.transform = `translate(-50%,-50%) scale(${cScale})`;
+      ghost.style.filter    = 'drop-shadow(0 3px 8px rgba(0,0,0,0.45))';
+      setTimeout(() => ghost.remove(), FLY + 100);
+
+      // Tell online.ts when this fly ends so it can delay the arena render
+      (window).__qtFlyEnd = Date.now() + FLY;
+    }
+
+    sendPlayCard(handIdx);
+    return;
+  }
   return onCardClick(handIdx);
 }
 

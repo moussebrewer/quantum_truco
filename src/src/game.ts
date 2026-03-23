@@ -1242,7 +1242,17 @@ function applyHandScore() {
   };
 
   if (headlessMode || typeof document === 'undefined') {
-    doNext();
+    // In headless mode (server): stop here so the hand_end state can be
+    // broadcast to clients before advancing. Server calls serverStartNextHand().
+    if (G.scores[0] >= G.target || G.scores[1] >= G.target) {
+      const winner = G.scores[0] >= G.target ? 0 : 1;
+      G.matchEnded = true;
+      G.winnerTeam = winner;
+      G.winnerName = G.tableSize === 2
+        ? G.players[winner === 0 ? 0 : 1].name : `Equipo ${winner}`;
+      G.phase = 'match_end';
+    }
+    // phase remains 'hand_end' unless match ended above
     return;
   }
 
@@ -1432,6 +1442,13 @@ export function validateIntentActor(seat, type) {
   if (G.matchEnded) return false;
   if (type === 'pending') return !!G.pendingChant && G.pendingChant.responderSeat === seat;
   return !G.pendingChant && G.activeSeat === seat;
+}
+
+// Called by server after broadcasting hand_end state to clients.
+// Deals the next hand (or does nothing if match already ended).
+export function serverStartNextHand() {
+  if (!G || G.matchEnded || G.phase === 'match_end' || G.phase !== 'hand_end') return;
+  dealNewHand();
 }
 
 export function getOppSeat(seat) {
