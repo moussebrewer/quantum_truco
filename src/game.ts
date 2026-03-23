@@ -1059,7 +1059,7 @@ function resolveTrick() {
 }
 
 // Sweep cards off the table before starting next trick
-function animateSweepTrick(onDone) {
+export function animateSweepTrick(onDone) {
   if (headlessMode || typeof document === 'undefined') {
     onDone();
     return;
@@ -1081,7 +1081,7 @@ function animateSweepTrick(onDone) {
 }
 
 // Run collapse animation on cards in the arena, then call cb
-function animateCollapse(cb) {
+export function animateCollapse(cb) {
   if (headlessMode || typeof document === 'undefined') {
     cb();
     return;
@@ -1328,7 +1328,7 @@ function animateDeal(onDone) {
   }, LABEL_DURATION);
 }
 
-function dealCardsAnimated(onDone) {
+export function dealCardsAnimated(onDone) {
   if (headlessMode || typeof document === 'undefined') {
     onDone();
     return;

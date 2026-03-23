@@ -611,7 +611,25 @@ function dispatchRespondFlor(action) {
 }
 
 function dispatchGoToMazo() {
-  return G?.onlineMode ? sendGoToMazo() : goToMazo();
+  if (!G?.onlineMode) {
+    goToMazo();
+    return;
+  }
+  // Online: show local confirmation modal, then send to server on confirm
+  const oppTeam = 1 - (G.players[G.viewerSeat]?.team ?? 0);
+  const pts     = (G.bet?.level >= 0 && G.bet?.level <= 3)
+    ? [1, 2, 3, 4][G.bet.level]
+    : 1;
+  const p = G.players[G.viewerSeat];
+  showModal('danger',
+    `${p?.name || 'Vos'} se va al Mazo`,
+    `Eq ${oppTeam} cobra <strong>${pts} pts</strong> de Truco.`,
+    pts,
+    [
+      { label: 'Confirmar', cls: 'danger', cb: () => { closeModal(); sendGoToMazo(); }},
+      { label: 'Cancelar',  cls: 'primary', cb: closeModal },
+    ]
+  );
 }
 
 // ─────────────────────────────────────────────────────────────
