@@ -44,6 +44,8 @@ import {
   sendGoToMazo,
 } from './online';
 
+import { flying, arenaKey, COLLAPSE_DUR, COLLAPSE_STAGGER } from './anim';
+
 export function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   const el = document.getElementById(id);
@@ -618,7 +620,15 @@ function dispatchGoToMazo() {
 // Funciones de cartas clásicas
 // ─────────────────────────────────────────────────────────────
 
+// Nombre visible de un equipo: en mano a mano es el nombre del jugador.
+export function teamLabel(team) {
+  if (G && G.tableSize === 2 && G.players?.[team]) return G.players[team].name;
+  return team === 0 ? 'Equipo A' : 'Equipo B';
+}
+
 export function renderGame() {
+  const screen = document.getElementById('screen-game');
+  if (screen) screen.classList.toggle('four-players', G.tableSize > 2);
   updateHeader();
   renderArena();
   renderHand();
@@ -627,9 +637,15 @@ export function renderGame() {
 }
 
 function updateHeader() {
-  const { scores, target, handNum, bet } = G;
+  const { scores, handNum, bet } = G;
   renderTally('score-tally-0', scores[0], 0);
   renderTally('score-tally-1', scores[1], 1);
+  for (const t of [0, 1]) {
+    const nameEl = document.getElementById(`score-name-${t}`);
+    if (nameEl) nameEl.textContent = teamLabel(t);
+    const numEl = document.getElementById(`score-num-${t}`);
+    if (numEl) numEl.textContent = String(scores[t]);
+  }
   document.getElementById('hdr-round').textContent = `Mano ${handNum} · Baza ${G.trickIdx+1}`;
   const lvl = TRUCO_LEVELS[bet.level];
   document.getElementById('hdr-bet').textContent = `Truco: ${lvl.name} (${lvl.pts} pt${lvl.pts>1?'s':''})`;
@@ -667,47 +683,113 @@ function renderTally(elId, pts, team) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// Estado de animación por carta. El render es idempotente: si se vuelve a
+// dibujar en medio de una animación, la retoma donde iba (delay negativo).
+// Así las animaciones salen de comparar el estado anterior con el nuevo y
+// funcionan igual en local y en online.
+// ─────────────────────────────────────────────────────────────
+const ENTER_DUR = 360;
+const arenaSeen = new Map(); // arenaKey -> { state:'q'|'c', enterAt, collapseAt }
+const handSeen  = new Map(); // handKey  -> { state:'q'|'c', collapseAt }
+
+function pruneSeen(map, handNum) {
+  if (map.size < 60) return;
+  const prefix = `${handNum}:`;
+  for (const k of [...map.keys()]) if (!k.startsWith(prefix)) map.delete(k);
+}
+
+// HTML de una carta que está colapsando: la cara cuántica se desvanece
+// sobre la cara definitiva.
+function collapseLayers(qc, id, startAt, now) {
+  const [a, b] = qc.options;
+  const c = qc.collapsedTo || getVisibleCard(qc);
+  const delay = Math.round(startAt - now);
+  return `<div class="collapse-layers" style="--cdelay:${delay}ms">
+      <div class="layer-collapsed">${buildCardSVG(c.rank, c.suit, id)}</div>
+      <div class="layer-entangled">${buildEntangled(a.rank, a.suit, b.rank, b.suit, false)}</div>
+    </div>`;
+}
+
 export function renderArena() {
   const slotsEl = document.getElementById('arena-slots');
   const bazaEl  = document.getElementById('baza-result-display');
   slotsEl.innerHTML = '';
 
-  const cScale = G.tableSize > 2 ? 0.62 : 0.76;
-
-  // Opponent deck indicator (left side of arena)
   renderOpponentIndicator();
+
+  const now = performance.now();
+  const viewerTeam = teamOf(getViewerSeatForRender());
+  pruneSeen(arenaSeen, G.handNum);
+  let newCollapses = 0;
 
   G.playOrder.forEach(seat => {
     const qc = G.playsThisTrick[seat];
     if (!qc) return;
-    const slot = document.createElement('div');
-    slot.className = 'arena-slot';
-    const d = document.createElement('div');
-    const rot = ((seat * 7) % 15) - 7;
-    d.style.cssText = `--ds:${cScale};--dr:${rot}deg;transform:scale(${cScale});transform-origin:top center;flex-shrink:0;`;
-    if (qc.collapsedTo) {
-      const c = qc.collapsedTo;
-      d.innerHTML = buildCardSVG(c.rank, c.suit, `ct_${seat}_${c.rank}_${c.suit}`);
-    } else {
-      const [a, b] = qc.options;
-      d.innerHTML = buildEntangled(a.rank, a.suit, b.rank, b.suit, false);
-      d.style.filter = 'drop-shadow(0 0 10px rgba(0,200,255,0.6))';
+    const key = arenaKey(G.handNum, G.trickIdx, seat);
+    const isC = !!qc.collapsedTo;
+    const hasOptions = qc.options?.length === 2;
+    const isFlying = flying.has(key);
+
+    let rec = arenaSeen.get(key);
+    if (!rec) {
+      rec = { state: isC ? 'c' : 'q', enterAt: isFlying ? null : now, collapseAt: null };
+      // Llegó ya colapsada (online): entra y después colapsa.
+      if (isC && hasOptions && !isFlying) rec.collapseAt = now + ENTER_DUR + (newCollapses++) * COLLAPSE_STAGGER;
+      arenaSeen.set(key, rec);
+    } else if (rec.state === 'q' && isC) {
+      rec.state = 'c';
+      if (hasOptions) rec.collapseAt = now + (newCollapses++) * COLLAPSE_STAGGER;
     }
-    slot.appendChild(d);
+
+    const collapsing = isC && hasOptions && rec.collapseAt != null && now < rec.collapseAt + COLLAPSE_DUR;
+    const entering   = rec.enterAt != null && now < rec.enterAt + ENTER_DUR;
+
+    const slot = document.createElement('div');
+    slot.className = 'arena-slot ' + (teamOf(seat) === viewerTeam ? 'side-me' : 'side-opp');
+    slot.dataset.seat = String(seat);
+
+    const card = document.createElement('div');
+    card.className = 'qcard table-card';
+    card.style.setProperty('--rot', `${((seat * 7) % 9) - 4}deg`);
+    if (isFlying) card.classList.add('is-flying');
+    if (entering) {
+      card.classList.add('enter');
+      card.style.setProperty('--edelay', `${Math.round(rec.enterAt - now)}ms`);
+    }
+
+    if (collapsing) {
+      card.classList.add('collapsing');
+      card.innerHTML = collapseLayers(qc, `ct_${seat}_${qc.collapsedTo.rank}_${qc.collapsedTo.suit}`, rec.collapseAt, now);
+    } else if (isC) {
+      const c = qc.collapsedTo;
+      card.innerHTML = buildCardSVG(c.rank, c.suit, `ct_${seat}_${c.rank}_${c.suit}`);
+    } else if (hasOptions) {
+      const [a, b] = qc.options;
+      card.innerHTML = buildEntangled(a.rank, a.suit, b.rank, b.suit, false);
+      card.classList.add('quantum');
+    }
+    slot.appendChild(card);
+
+    const name = document.createElement('div');
+    name.className = 'slot-name t' + teamOf(seat);
+    name.textContent = G.players[seat]?.name || '';
+    slot.appendChild(name);
+
     slotsEl.appendChild(slot);
   });
 
   if (G.phase === 'baza_end' || G.phase === 'hand_end') {
     const last = G.trickWinners[G.trickWinners.length - 1];
-    bazaEl.textContent = last === -1 ? '⚔ PARDA' : `▲ Gana Eq ${last === 0 ? 'A' : 'B'}`;
-    bazaEl.style.color = last === -1 ? 'var(--gold)' : last === 0 ? 'var(--accent-a)' : 'var(--accent-b)';
-    // Highlight winner's card slot
-    const slots = document.querySelectorAll('#arena-slots .arena-slot');
-    if (last === -1) {
-      slots.forEach(s => s.classList.add('winner-draw'));
+    if (last === undefined) {
+      bazaEl.textContent = '';
     } else {
-      G.playOrder.forEach((seat, i) => {
-        if (slots[i] && teamOf(seat) === last) slots[i].classList.add(`winner-t${last}`);
+      bazaEl.textContent = last === -1 ? '⚔ Parda' : `▲ Gana ${teamLabel(last)}`;
+      bazaEl.style.color = last === -1 ? 'var(--gold)' : last === 0 ? 'var(--accent-a)' : 'var(--accent-b)';
+      slotsEl.querySelectorAll('.arena-slot').forEach(s => {
+        if (last === -1) s.classList.add('winner-draw');
+        else if (teamOf(Number(s.dataset.seat)) === last) s.classList.add(`winner-t${last}`);
+        else s.classList.add('loser');
       });
     }
   } else if (G.phase === 'collapsing') {
@@ -719,56 +801,37 @@ export function renderArena() {
 }
 
 function renderOpponentIndicator() {
-  let ind = document.getElementById('opp-indicator');
-  if (!ind) {
-    ind = document.createElement('div');
-    ind.id = 'opp-indicator';
-    ind.className = 'opp-indicator';
-    document.getElementById('arena').appendChild(ind);
-  }
+  const ind = document.getElementById('opp-zone');
+  if (!ind) return;
 
   const viewerSeat = getViewerSeatForRender();
   const oppSeats = allSeats().filter(s => teamOf(s) !== teamOf(viewerSeat));
   const oppCardCount = oppSeats.reduce((sum, s) => sum + (G.players[s]?.hand?.length || 0), 0);
   const isMano = oppSeats.some(s => s === G.manoSeat);
+  const isTurn = oppSeats.includes(G.pendingChant ? G.pendingChant.responderSeat : G.activeSeat)
+    && (G.phase === 'play' || G.phase === 'chant');
 
   ind.innerHTML = '';
+  ind.classList.toggle('is-turn', isTurn);
 
-  const stackEl = document.createElement('div');
-  stackEl.className = 'opp-ind-stack';
-  const show = Math.min(oppCardCount, 3);
-  for (let i = 0; i < show; i++) {
+  const fan = document.createElement('div');
+  fan.className = 'opp-fan';
+  fan.id = 'opp-fan';
+  for (let i = 0; i < oppCardCount; i++) {
     const c = document.createElement('div');
-    c.className = 'opp-ind-card';
-    c.style.cssText = `bottom:${i*5}px;left:${i*2}px;opacity:${0.5 + i*0.15};`;
-    if (i === show-1) c.innerHTML = '<span class="opp-ind-q">⊗</span>';
-    stackEl.appendChild(c);
+    c.className = 'card-back mini';
+    c.style.setProperty('--fan', `${(i - (oppCardCount - 1) / 2) * 7}deg`);
+    c.textContent = '⊗';
+    fan.appendChild(c);
   }
-  if (oppCardCount === 0) {
-    stackEl.style.opacity = '0.2';
-    const empty = document.createElement('div');
-    empty.className = 'opp-ind-card';
-    empty.style.cssText = 'opacity:0.2;';
-    stackEl.appendChild(empty);
-  }
-  ind.appendChild(stackEl);
+  ind.appendChild(fan);
 
-  const nameEl = document.createElement('div');
-  nameEl.className = 'opp-ind-name';
+  const info = document.createElement('div');
+  info.className = 'opp-info';
   const oppName = oppSeats.length === 1 ? G.players[oppSeats[0]].name : 'Rivales';
-  nameEl.textContent = oppName;
-  ind.appendChild(nameEl);
-
-  const countEl = document.createElement('div');
-  countEl.className = 'opp-ind-count';
-  countEl.textContent = oppCardCount > 0 ? `${oppCardCount} carta${oppCardCount!==1?'s':''}` : 'sin cartas';
-  if (isMano) {
-    const manoEl = document.createElement('div');
-    manoEl.className = 'opp-ind-mano';
-    manoEl.textContent = '✦ MANO';
-    ind.appendChild(manoEl);
-  }
-  ind.appendChild(countEl);
+  info.innerHTML = `<span class="opp-name"></span>${isMano ? '<span class="opp-mano">✦ mano</span>' : ''}`;
+  info.querySelector('.opp-name').textContent = oppName;
+  ind.appendChild(info);
 }
 
 export function renderHand() {
@@ -781,24 +844,57 @@ export function renderHand() {
   const isMyTurn   = G.activeSeat === viewerSeat && !G.pendingChant;
   const p          = G.players[viewerSeat];
   const isPlayable = !!p && isMyTurn && (G.phase === 'play' || G.phase === 'chant');
-  const scale = G.tableSize > 2 ? 0.795 : 0.925;
-  const hoverScale = scale * 1.08;
+
+  const area = rowEl.closest('.hand-area');
+  if (area) area.classList.toggle('my-turn', isPlayable);
 
   if (!p) {
     if (infoEl) infoEl.innerHTML = '';
     return;
   }
 
+  const now = performance.now();
+  pruneSeen(handSeen, G.handNum);
+  const n = p.hand.length;
+  const dup = {};
+
   p.hand.forEach((qc, i) => {
     const wrap = document.createElement('div');
-    wrap.className = 'hand-card-wrap' + (isPlayable ? ' playable' : '');
-    wrap.style.cssText = `transform:scale(${scale});--hw-hover:scale(${hoverScale}) translateY(-20px);`;
+    wrap.className = 'qcard hand-card' + (isPlayable ? ' playable' : '');
+    const off = i - (n - 1) / 2;
+    wrap.style.setProperty('--fan', `${off * 4}deg`);
+    wrap.style.setProperty('--lift', `${Math.abs(off) * 7}px`);
 
     const visibleCard = getVisibleCard(qc);
-    if (visibleCard) {
+    const hasOptions = qc?.options?.length === 2;
+    dup[qc.pairId] = (dup[qc.pairId] || 0) + 1;
+    const key = `${G.handNum}:${viewerSeat}:${qc.pairId}:${dup[qc.pairId]}`;
+
+    let rec = handSeen.get(key);
+    if (!rec) {
+      rec = { state: visibleCard ? 'c' : 'q', collapseAt: null };
+      handSeen.set(key, rec);
+    } else if (rec.state === 'q' && visibleCard) {
+      rec.state = 'c';
+      // Sincronizar con la carta entrelazada que colapsa en la mesa.
+      let at = now;
+      for (const [seatStr, played] of Object.entries(G.playsThisTrick || {})) {
+        if (played.pairId === qc.pairId) {
+          const r = arenaSeen.get(arenaKey(G.handNum, G.trickIdx, Number(seatStr)));
+          if (r?.collapseAt != null) at = Math.max(now, r.collapseAt);
+        }
+      }
+      rec.collapseAt = at;
+    }
+    const collapsing = visibleCard && hasOptions && rec.collapseAt != null && now < rec.collapseAt + COLLAPSE_DUR;
+
+    if (collapsing) {
+      wrap.classList.add('collapsing');
+      wrap.innerHTML = collapseLayers({ ...qc, collapsedTo: visibleCard }, `hc_${qc.pairId}_${i}`, rec.collapseAt, now);
+    } else if (visibleCard) {
       wrap.innerHTML = buildCardSVG(visibleCard.rank, visibleCard.suit,
         `hc_${qc.pairId}_${i}_${Math.random().toString(36).slice(2,4)}`);
-    } else if (qc?.options?.length === 2) {
+    } else if (hasOptions) {
       const [a, b] = qc.options;
       wrap.innerHTML = buildEntangled(a.rank, a.suit, b.rank, b.suit, false);
     } else {
@@ -824,7 +920,7 @@ function renderEnvidoInfo(p, el) {
   });
   const lm = envidoMetric(liveHand);
   let html = `
-    <div class="envido-stat"><span class="envido-stat-label">Envido μ</span><span class="envido-stat-val">${lm.mu.toFixed(1)}</span></div>
+    <div class="envido-stat"><span class="envido-stat-label">Envido medio</span><span class="envido-stat-val">${lm.mu.toFixed(1)}</span></div>
     <div class="envido-stat"><span class="envido-stat-label">P(≥28)</span><span class="envido-stat-val">${(lm.p28*100).toFixed(0)}%</span></div>
     <div class="envido-stat"><span class="envido-stat-label">Rango</span><span class="envido-stat-val">${lm.min}–${lm.max}</span></div>`;
   if (G.conFlor) {
@@ -837,7 +933,11 @@ function renderEnvidoInfo(p, el) {
 function renderHistoryPanel() {
   const list = document.getElementById('history-list');
   list.innerHTML = '';
-  (G.trickHistory || []).forEach((entry, idx) => {
+  const history = G.trickHistory || [];
+  const panel = document.getElementById('history-panel');
+  if (panel) panel.classList.toggle('empty', history.length === 0);
+
+  history.forEach((entry, idx) => {
     const winner = G.trickWinners[idx];
     const baza   = document.createElement('div');
     baza.className = 'history-baza';
@@ -850,23 +950,14 @@ function renderHistoryPanel() {
     const row = document.createElement('div');
     row.className = 'history-cards-row';
 
-    const sc = 0.40, cW = Math.round(160*sc), cH = Math.round(246*sc);
     entry.forEach(({ seat, card }) => {
       const d = document.createElement('div');
-      d.style.cssText = `width:${cW}px;height:${cH}px;flex-shrink:0;overflow:hidden;position:relative;`;
-      const inner = document.createElement('div');
-      inner.style.cssText = `transform:scale(${sc});transform-origin:top left;position:absolute;top:0;left:0;`;
-      inner.innerHTML = buildCardSVG(card.rank, card.suit,
+      d.className = 'qcard history-card';
+      d.innerHTML = buildCardSVG(card.rank, card.suit,
         `h_${idx}_${card.rank}_${card.suit}_${Math.random().toString(36).slice(2,4)}`);
-      // Glow on winning card
-      if (winner !== -1 && teamOf(seat) === winner) {
-        inner.style.filter = winner === 0
-          ? 'drop-shadow(0 0 6px rgba(0,160,255,0.9))'
-          : 'drop-shadow(0 0 6px rgba(204,17,51,0.9))';
-      } else if (winner === -1) {
-        inner.style.filter = 'drop-shadow(0 0 5px rgba(200,151,30,0.7))';
-      }
-      d.appendChild(inner);
+      if (winner === -1) d.classList.add('draw');
+      else if (teamOf(seat) === winner) d.classList.add(`win-t${winner}`);
+      else d.classList.add('lost');
       row.appendChild(d);
     });
 
@@ -875,7 +966,7 @@ function renderHistoryPanel() {
     const wlbl = document.createElement('div');
     wlbl.className = 'history-winner';
     if (winner === -1) { wlbl.textContent = '⚔ Parda'; wlbl.style.color = 'var(--gold)'; }
-    else { wlbl.textContent = `▲ Eq ${winner===0?'A':'B'}`; wlbl.style.color = winner===0?'var(--accent-a)':'var(--accent-b)'; }
+    else { wlbl.textContent = `▲ ${teamLabel(winner)}`; wlbl.style.color = winner===0?'var(--accent-a)':'var(--accent-b)'; }
     baza.appendChild(wlbl);
     list.appendChild(baza);
   });
@@ -956,7 +1047,7 @@ function renderActionPanel() {
 
   } else if (G.phase === 'baza_end') {
     const last = G.trickWinners[G.trickWinners.length - 1];
-    turnLbl.textContent = last === -1 ? '⚔ Parda' : `Eq ${last===0?'A':'B'} gana`;
+    turnLbl.textContent = last === -1 ? '⚔ Parda' : `${teamLabel(last)} gana`;
     if (!G.onlineMode && canTeamRaiseNow(bet, actTeam)) {
       const nxt = TRUCO_LEVELS[bet.level + 1];
       if (nxt) addBtn(btns, `${nxt.name} (${nxt.pts}p)`, 'gold', dispatchSingTruco);
@@ -985,7 +1076,7 @@ function renderPendingChant(turnLbl, btns) {
     addChantState(btns,
       `${caller.name} canta`,
       nxt.name.toUpperCase(),
-      `Querer: ${nxt.pts} pts | Rechazar: Eq ${raiserTeam} cobra ${curPts} pt${curPts>1?'s':''}`
+      `Querer: ${nxt.pts} pts | Rechazar: ${teamLabel(raiserTeam)} cobra ${curPts} pt${curPts>1?'s':''}`
     );
 
     addBtn(btns, `✓ Quiero (${nxt.pts}p)`, 'success', () => dispatchRespondTruco(true));
@@ -1013,7 +1104,7 @@ function renderPendingChant(turnLbl, btns) {
     addChantState(btns,
       `${caller.name} canta`,
       callStr,
-      `Querer: ${curPts} pts | Rechazar: Eq ${env.callerTeam} cobra ${rejPts} pts`
+      `Querer: ${curPts} pts | Rechazar: ${teamLabel(env.callerTeam)} cobra ${rejPts} pts`
     );
 
     addBtn(btns, `✓ Quiero (${curPts}p)`, 'success', () => dispatchRespondEnvido('accept'));
@@ -1029,7 +1120,7 @@ function renderPendingChant(turnLbl, btns) {
     if (stage === 'initial') {
       addChantState(btns, `${caller.name} canta`, 'FLOR', `¿También tenés flor?`);
       addBtn(btns, '🌸 Sí, tengo Flor', 'success', () => dispatchRespondFlor('yes'));
-      addBtn(btns, `✗ No (Eq ${teamOf(pc.callerSeat)} cobra 3p)`, 'danger', () => dispatchRespondFlor('no'));
+      addBtn(btns, `✗ No (${teamLabel(teamOf(pc.callerSeat))} cobra 3p)`, 'danger', () => dispatchRespondFlor('no'));
 
     } else if (stage === 'contraflor') {
       addChantState(btns, 'Ambos tienen Flor', '¿CONTRAFLOR?', ``);
@@ -1153,15 +1244,13 @@ export function showEnvidoAnnouncement(res, pts, finalCards) {
     // Cards row
     const cardsRow = document.createElement('div');
     cardsRow.className = 'envido-cards-row';
-    cardsRow.style.marginBottom = '18px';
 
     contribs.forEach(({ card, contrib, isSuit }) => {
       const wrap = document.createElement('div');
       wrap.className = 'envido-card-wrap' + (isSuit ? ' contributes' : ' notcontrib');
-      wrap.style.cssText = `width:${cW}px;height:${cH}px;flex-shrink:0;overflow:visible;position:relative;`;
 
       const inner = document.createElement('div');
-      inner.style.cssText = `transform:scale(${cardScale});transform-origin:top left;position:absolute;top:0;left:0;`;
+      inner.className = 'qcard';
       inner.innerHTML = buildCardSVG(card.rank, card.suit, `env_${seat}_${card.rank}_${card.suit}_${Math.random().toString(36).slice(2,4)}`);
       wrap.appendChild(inner);
 

@@ -2,7 +2,14 @@
 // Refactor of the original single-file Quantum Truco source.
 // This file owns game state, rules, flow, and gameplay mutations.
 
+import { flying, arenaKey, flyGhost, makeCardBack, prefersReducedMotion, COLLAPSE_DUR, COLLAPSE_STAGGER } from './anim';
+
 export const setupCfg = { tableSize:2, target:15, conFlor:false, mode:'human' };
+
+// Asiento de quien está mirando la pantalla (para orientar animaciones).
+function viewerSeatForAnim() {
+  return (G.aiSeat !== null && G.aiSeat !== undefined) ? 0 : G.activeSeat;
+}
 export let florOn = false;
 
 const runtime = {
@@ -824,89 +831,61 @@ export function onCardClick(handIdx) {
     return;
   }
 
-  const handWraps = document.querySelectorAll('#hand-row .hand-card-wrap');
-  const srcEl  = handWraps[handIdx];
-  const srcRect = srcEl ? srcEl.getBoundingClientRect() : null;
-  const srcSvg  = srcEl ? srcEl.querySelector('svg') : null;
-  const ghostSvg = srcSvg ? srcSvg.cloneNode(true) : null;
+  // Origen del vuelo: la carta de la mano si juega quien mira la pantalla,
+  // o el abanico del rival si juega el otro.
+  const fromHand = seat === viewerSeatForAnim();
+  let srcRect = null;
+  let ghostNode = null;
+  if (fromHand) {
+    const srcEl = document.querySelectorAll('#hand-row .hand-card')[handIdx];
+    const srcSvg = srcEl ? srcEl.querySelector('svg') : null;
+    if (srcEl && srcSvg) {
+      srcRect = srcEl.getBoundingClientRect();
+      ghostNode = srcSvg.cloneNode(true);
+    }
+  } else {
+    const fan = document.getElementById('opp-fan');
+    if (fan && fan.lastElementChild) srcRect = fan.lastElementChild.getBoundingClientRect();
+  }
 
   const qc = p.hand.splice(handIdx, 1)[0];
   p.played.push(qc);
   G.playsThisTrick[seat] = qc;
   uiLog(`${p.name} juega carta cuántica: ${qcLabel(qc)}`, 'collapse');
 
+  const key = arenaKey(G.handNum, G.trickIdx, seat);
+  const destSelector = `#arena-slots .arena-slot[data-seat="${seat}"] .table-card`;
+  if (srcRect) flying.add(key);
+
   uiRenderHand();
+  uiRenderArena();
 
-  const cScale    = G.tableSize > 2 ? 0.62 : 0.76;
-  const srcScale  = G.tableSize > 2 ? 0.795 : 0.925;
-  const FLY       = 620;
-
-  const continueGame = () => {
-    G.playOrderIdx++;
-    if (G.playOrderIdx >= G.playOrder.length) {
-      resolveTrick();
-    } else {
-      const nextSeat = G.playOrder[G.playOrderIdx];
-      G.activeSeat = nextSeat;
-      if (G.trickIdx === 0) G.phase = 'chant';
-      passTo(nextSeat);
+  if (srcRect) {
+    const dest = document.querySelector(destSelector);
+    const destRect = dest ? dest.getBoundingClientRect() : null;
+    if (!ghostNode && dest) {
+      const destSvg = dest.querySelector('svg');
+      ghostNode = destSvg ? destSvg.cloneNode(true) : null;
     }
-  };
-
-  if (srcRect && ghostSvg) {
-    const ghost = document.createElement('div');
-    const srcCX = srcRect.left + srcRect.width  / 2;
-    const srcCY = srcRect.top  + srcRect.height / 2;
-    ghost.style.cssText = `
-      position:fixed; pointer-events:none; z-index:600;
-      left:${srcCX}px; top:${srcCY}px;
-      transform:translate(-50%,-50%) scale(${srcScale});
-      transition:none;
-      filter:drop-shadow(0 10px 28px rgba(0,0,0,0.75));
-    `;
-    ghost.appendChild(ghostSvg);
-    document.body.appendChild(ghost);
-
-    uiRenderArena();
-    const slots   = document.querySelectorAll('#arena-slots .arena-slot');
-    const destSlot = slots[slots.length - 1];
-    const destInner = destSlot ? destSlot.querySelector('div') : null;
-    if (destInner) destInner.style.visibility = 'hidden';
-
-    const destRect = destSlot ? destSlot.getBoundingClientRect() : null;
-    const destCX   = destRect ? destRect.left + destRect.width  / 2 : srcCX;
-    const destCY   = destRect ? destRect.top  + destRect.height / 2 : srcCY + 200;
-
-    ghost.getBoundingClientRect();
-    ghost.style.transition = `left ${FLY}ms cubic-bezier(0.25,0.1,0.2,1),
-                               top  ${FLY}ms cubic-bezier(0.35,0,0.15,1),
-                               transform ${FLY}ms cubic-bezier(0.25,0.1,0.2,1),
-                               filter ${FLY}ms ease`;
-    ghost.style.left      = `${destCX}px`;
-    ghost.style.top       = `${destCY}px`;
-    ghost.style.transform = `translate(-50%,-50%) scale(${cScale})`;
-    ghost.style.filter    = 'drop-shadow(0 3px 8px rgba(0,0,0,0.45))';
-
-    setTimeout(() => {
-      ghost.remove();
-      const target = (destInner && destInner.isConnected && destInner.style.visibility === 'hidden')
-        ? destInner
-        : null;
-      if (target) {
-        target.style.visibility = 'visible';
-        target.style.transform  = `scale(${cScale * 1.07})`;
-        target.getBoundingClientRect();
-        target.style.transition = 'transform 0.28s cubic-bezier(0.34,1.4,0.64,1)';
-        target.style.transform  = `scale(${cScale})`;
-        setTimeout(() => { if (target) target.style.transition = ''; }, 350);
+    flyGhost(ghostNode, srcRect, destRect, { duration: 430 }).then(() => {
+      flying.delete(key);
+      // La mesa pudo redibujarse durante el vuelo: buscar la carta actual.
+      const el = document.querySelector(destSelector);
+      if (el) {
+        el.classList.remove('is-flying');
+        el.classList.add('landed');
       }
-    }, FLY);
+    });
+  }
 
-    continueGame();
-
+  G.playOrderIdx++;
+  if (G.playOrderIdx >= G.playOrder.length) {
+    resolveTrick();
   } else {
-    uiRenderArena();
-    continueGame();
+    const nextSeat = G.playOrder[G.playOrderIdx];
+    G.activeSeat = nextSeat;
+    if (G.trickIdx === 0) G.phase = 'chant';
+    passTo(nextSeat);
   }
 }
 
@@ -1049,83 +1028,45 @@ function resolveTrick() {
       if (!handOver) {
         setTimeout(() => {
           if (G.phase === 'baza_end') animateSweepTrick(() => nextTrick());
-        }, 5600);
+        }, 2600);
       }
     });
-  }, 1400);
+  }, 750);
 }
 
 // Sweep cards off the table before starting next trick
 function animateSweepTrick(onDone) {
-  if (headlessMode || typeof document === 'undefined') {
+  if (headlessMode || typeof document === 'undefined' || prefersReducedMotion()) {
     onDone();
     return;
   }
   const slots = [...document.querySelectorAll('#arena-slots .arena-slot')];
   const winnerTeam = G.trickWinners[G.trickWinners.length - 1];
-  const sweepY = winnerTeam === -1 ? 80 : -60;
-  const sweepX = winnerTeam === 1 ? 60 : -60;
+  const viewerTeam = teamOf(viewerSeatForAnim());
+  // Las cartas se van hacia quien ganó la baza.
+  const dy = winnerTeam === -1 ? 0 : (winnerTeam === viewerTeam ? 90 : -90);
 
   slots.forEach((slot, i) => {
-    const d = slot.querySelector('div');
-    if (!d) return;
-    d.style.transition = `transform 0.32s cubic-bezier(0.4,0,1,1) ${i * 55}ms, opacity 0.28s ease ${i * 55 + 60}ms`;
-    d.style.transform += ` translate(${sweepX}px, ${sweepY}px) scale(0.7)`;
-    d.style.opacity = '0';
+    slot.animate(
+      [{ transform: 'none', opacity: 1 }, { transform: `translateY(${dy}px) scale(0.8)`, opacity: 0 }],
+      { duration: 320, delay: i * 50, easing: 'ease-in', fill: 'forwards' },
+    );
   });
 
-  setTimeout(onDone, 450);
+  setTimeout(onDone, 330 + slots.length * 50);
 }
 
-// Run collapse animation on cards in the arena, then call cb
+// Colapso de las cartas de la mesa (y de sus pares en la mano). El render
+// detecta qué cartas pasaron de cuánticas a definidas y las anima en orden.
 function animateCollapse(cb) {
   if (headlessMode || typeof document === 'undefined') {
     cb();
     return;
   }
-  const arena = document.getElementById('arena-slots');
-  const slots = [...arena.querySelectorAll('.arena-slot')];
-
-  const ANIM_DURATION = 1800;
-  const STAGGER = 1200;
-  let maxEnd = 0;
-
-  slots.forEach((slot, i) => {
-    const delay = i * STAGGER;
-    maxEnd = Math.max(maxEnd, delay + ANIM_DURATION);
-
-    setTimeout(() => {
-      const d = slot.querySelector('div');
-      if (!d) return;
-
-      const seat = G.playOrder[i];
-      const qc = G.playsThisTrick[seat];
-      if (!qc || !qc.collapsedTo) return;
-
-      const [a, b] = qc.options;
-      const entangledSvg = uiBuildEntangled(a.rank, a.suit, b.rank, b.suit, false);
-
-      const cScale = G.tableSize > 2 ? 0.62 : 0.76;
-      const rot = ((seat * 7) % 15) - 7;
-      const collapsedSvg = uiBuildCardSVG(qc.collapsedTo.rank, qc.collapsedTo.suit,
-        `col_${seat}_${qc.collapsedTo.rank}_${qc.collapsedTo.suit}_${i}`);
-
-      d.innerHTML = `
-        <div class="collapse-wrap" style="--ds:${cScale};--dr:${rot}deg;">
-          <div class="layer-collapsed">${collapsedSvg}</div>
-          <div class="layer-entangled">${entangledSvg}</div>
-        </div>`;
-      d.style.filter = '';
-
-      document.querySelectorAll('#hand-row .hand-card-wrap svg').forEach(svg => {
-        svg.style.animation = 'none';
-        svg.offsetHeight;
-        svg.style.animation = 'shakePartner 0.5s ease';
-      });
-    }, delay);
-  });
-
-  setTimeout(cb, maxEnd + 300);
+  uiRenderArena();
+  uiRenderHand();
+  const n = Object.keys(G.playsThisTrick).length;
+  setTimeout(cb, Math.max(0, n - 1) * COLLAPSE_STAGGER + COLLAPSE_DUR + 250);
 }
 
 function nextTrick() {
@@ -1296,22 +1237,29 @@ function animateDeal(onDone) {
   if (runtime.showScreen) runtime.showScreen('screen-game');
   if (runtime.renderGame) runtime.renderGame();
 
+  // La mano ya está dibujada en su lugar final, pero oculta hasta repartir.
+  const handArea = document.querySelector('.hand-area');
+  const oppZone  = document.getElementById('opp-zone');
+  if (handArea) handArea.classList.add('pre-deal');
+  if (oppZone)  oppZone.classList.add('pre-deal');
+
   const overlay = document.createElement('div');
   overlay.className = 'new-hand-overlay';
   const manoName = G.players[G.manoSeat].name;
   overlay.innerHTML = `
     <div class="new-hand-label">Mano ${G.handNum}</div>
     <div class="new-hand-num">Partida a ${G.target} pts · ${G.scores[0]}–${G.scores[1]}</div>
-    <div class="mano-indicator">✦ Es mano: ${manoName} ✦</div>`;
+    <div class="mano-indicator"></div>`;
+  overlay.querySelector('.mano-indicator').textContent = `✦ Es mano: ${manoName} ✦`;
   document.body.appendChild(overlay);
 
   const mazoEl = document.getElementById('mazo-stack');
   if (mazoEl) {
-    mazoEl.style.animation = 'mazoShake 0.5s ease 200ms, mazoGlow 1.2s ease 100ms';
-    setTimeout(() => { if (mazoEl) mazoEl.style.animation = ''; }, 1400);
+    mazoEl.classList.add('shuffling');
+    setTimeout(() => mazoEl.classList.remove('shuffling'), 1100);
   }
 
-  const LABEL_DURATION = 3000;
+  const LABEL_DURATION = prefersReducedMotion() ? 700 : 1500;
   setTimeout(() => {
     overlay.remove();
     dealCardsAnimated(onDone);
@@ -1319,85 +1267,51 @@ function animateDeal(onDone) {
 }
 
 function dealCardsAnimated(onDone) {
-  if (headlessMode || typeof document === 'undefined') {
+  const handArea = document.querySelector('.hand-area');
+  const oppZone  = document.getElementById('opp-zone');
+  const reveal = () => {
+    if (handArea) handArea.classList.remove('pre-deal');
+    if (oppZone)  oppZone.classList.remove('pre-deal');
+  };
+  if (headlessMode || typeof document === 'undefined' || prefersReducedMotion()) {
+    reveal();
     onDone();
     return;
   }
-  const rowEl  = document.getElementById('hand-row');
-  if (rowEl) rowEl.innerHTML = '';
-  const infoEl = document.getElementById('envido-info');
-  if (infoEl) infoEl.innerHTML = '';
 
-  const humanSeat = (G.aiSeat !== null) ? 0 : G.activeSeat;
-  const p     = G.players[humanSeat];
-  const scale = G.tableSize > 2 ? 0.795 : 0.925;
+  const mine = [...document.querySelectorAll('#hand-row .hand-card')];
+  const opp  = [...document.querySelectorAll('#opp-fan .card-back')];
+  const mazoEl = document.getElementById('mazo-c1');
+  if (!mazoEl || mine.length === 0) {
+    reveal();
+    onDone();
+    return;
+  }
+  const from = mazoEl.getBoundingClientRect();
 
-  const mazoEl   = document.getElementById('mazo-c1') || document.querySelector('.mazo-c1');
-  const mazoRect = mazoEl
-    ? mazoEl.getBoundingClientRect()
-    : { left: window.innerWidth - 100, top: window.innerHeight - 150, width: 62, height: 96 };
-  const origX = mazoRect.left + mazoRect.width  / 2;
-  const origY = mazoRect.top  + mazoRect.height / 2;
+  // Cada carta queda oculta por separado hasta que le llega su dorso volando.
+  [...mine, ...opp].forEach(el => { el.style.visibility = 'hidden'; });
+  reveal();
 
-  const STAGGER     = 320;
-  const FLY         = 520;
-  const TOTAL       = STAGGER * (p.hand.length - 1) + FLY + 180;
+  const STEP = 130;
+  const FLY  = 380;
+  const order = [];
+  for (let i = 0; i < Math.max(mine.length, opp.length); i++) {
+    if (opp[i])  order.push({ el: opp[i],  mine: false });
+    if (mine[i]) order.push({ el: mine[i], mine: true });
+  }
 
-  p.hand.forEach((qc, i) => {
+  order.forEach(({ el, mine: isMine }, k) => {
     setTimeout(() => {
-      const wrap = document.createElement('div');
-      wrap.className = 'hand-card-wrap';
-      wrap.style.cssText = `transform:scale(${scale});--hw-hover:scale(${scale*1.08}) translateY(-20px);visibility:hidden;`;
-      const [a, b] = qc.options;
-      wrap.innerHTML = uiBuildEntangled(a.rank, a.suit, b.rank, b.suit, false);
-      rowEl.appendChild(wrap);
-
-      const destRect = wrap.getBoundingClientRect();
-      const destX    = destRect.left + destRect.width  / 2;
-      const destY    = destRect.top  + destRect.height / 2;
-
-      const realSvg  = wrap.querySelector('svg');
-      const ghostSvg = realSvg ? realSvg.cloneNode(true) : null;
-      if (!ghostSvg) { wrap.style.visibility = 'visible'; return; }
-
-      const ghost = document.createElement('div');
-      ghost.style.cssText = `
-        position:fixed; pointer-events:none; z-index:600;
-        left:${origX}px; top:${origY}px;
-        transform:translate(-50%,-50%) scale(${scale * 0.5}) rotate(${(i-1)*12}deg);
-        transition:none;
-        filter:drop-shadow(0 6px 18px rgba(0,0,0,0.7));
-        opacity:0.85;
-      `;
-      ghost.appendChild(ghostSvg);
-      document.body.appendChild(ghost);
-
-      ghost.getBoundingClientRect();
-      ghost.style.transition = `left   ${FLY}ms cubic-bezier(0.25,0.1,0.2,1),
-                                 top    ${FLY}ms cubic-bezier(0.35,0,0.15,1),
-                                 transform ${FLY}ms cubic-bezier(0.25,0.1,0.2,1),
-                                 opacity   ${FLY}ms ease,
-                                 filter    ${FLY}ms ease`;
-      ghost.style.left      = `${destX}px`;
-      ghost.style.top       = `${destY}px`;
-      ghost.style.transform = `translate(-50%,-50%) scale(${scale})`;
-      ghost.style.filter    = 'drop-shadow(0 2px 6px rgba(0,0,0,0.4))';
-      ghost.style.opacity   = '1';
-
-      setTimeout(() => {
-        ghost.remove();
-        wrap.style.visibility = 'visible';
-        wrap.style.transform  = `scale(${scale * 1.06})`;
-        wrap.getBoundingClientRect();
-        wrap.style.transition = `transform 0.24s cubic-bezier(0.34,1.4,0.64,1)`;
-        wrap.style.transform  = `scale(${scale})`;
-        setTimeout(() => { wrap.style.transition = ''; }, 300);
-      }, FLY);
-
-    }, i * STAGGER);
+      const to = el.getBoundingClientRect();
+      flyGhost(makeCardBack(), from, to, { duration: FLY, fromRot: -25 }).then(() => {
+        el.style.visibility = '';
+        if (isMine) el.classList.add('reveal');
+      });
+    }, k * STEP);
   });
 
-  setTimeout(onDone, TOTAL);
+  setTimeout(onDone, (order.length - 1) * STEP + FLY + 380);
 }
 
 function showWin() {

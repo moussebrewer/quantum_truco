@@ -132,12 +132,12 @@ const APP_HTML = `<!-- ═══════════════════
   <div class="game-header">
     <div class="score-display">
       <div class="score-team">
-        <div class="score-team-name t0">Eq A</div>
+        <div class="score-team-head t0"><span class="score-team-name" id="score-name-0">Equipo A</span><span class="score-num" id="score-num-0">0</span></div>
         <div class="score-pts-wrap" id="score-tally-0"></div>
       </div>
       <div class="score-sep">vs</div>
       <div class="score-team">
-        <div class="score-team-name t1">Eq B</div>
+        <div class="score-team-head t1"><span class="score-team-name" id="score-name-1">Equipo B</span><span class="score-num" id="score-num-1">0</span></div>
         <div class="score-pts-wrap" id="score-tally-1"></div>
       </div>
     </div>
@@ -145,14 +145,16 @@ const APP_HTML = `<!-- ═══════════════════
       <div class="game-round-label" id="hdr-round">Mano 1 · Baza 1</div>
       <div class="game-bet-label" id="hdr-bet">Truco: Base (1 pt)</div>
     </div>
-    <div class="online-header-status" id="online-header-status"></div>
-    <button class="quantum-btn-small" id="btn-online-leave" onclick="leaveOnlineRoom()" style="display:none">SALIR</button>
-    <button class="quantum-btn-small" id="btn-log-toggle" onclick="toggleLog()">⊗ LOG</button>
+    <div class="header-actions">
+      <div class="online-header-status" id="online-header-status"></div>
+      <button class="quantum-btn-small" id="btn-online-leave" onclick="leaveOnlineRoom()" style="display:none">Salir</button>
+      <button class="quantum-btn-small" id="btn-log-toggle" onclick="toggleLog()">Log</button>
+    </div>
   </div>
 
-  <!-- Main area: log sidebar + arena + history sidebar -->
+  <!-- Cuerpo: log | mesa + mano | bazas + cantos -->
   <div class="game-table">
-    <!-- Log sidebar (left, open by default) -->
+    <!-- Log (izquierda, plegable) -->
     <div class="log-sidebar" id="log-sidebar">
       <div class="log-sidebar-header">
         <span class="log-sidebar-title">⊗ Log</span>
@@ -161,37 +163,41 @@ const APP_HTML = `<!-- ═══════════════════
       <div class="log-entries" id="log-panel"></div>
     </div>
 
-    <div class="arena" id="arena">
-      <div class="mazo-stack" id="mazo-stack">
-        <div class="mazo-card mazo-c3"></div>
-        <div class="mazo-card mazo-c2"></div>
-        <div class="mazo-card mazo-c1" id="mazo-c1">⊗</div>
-        <div class="mazo-label">Mazo</div>
+    <!-- Columna de juego: mesa arriba, mano abajo -->
+    <div class="play-col">
+      <div class="arena" id="arena">
+        <div class="opp-zone" id="opp-zone"></div>
+        <div class="arena-center">
+          <div class="arena-slots" id="arena-slots"></div>
+          <div class="baza-result" id="baza-result-display"></div>
+        </div>
+        <div class="mazo-stack" id="mazo-stack">
+          <div class="mazo-pile">
+            <div class="card-back mazo-c3"></div>
+            <div class="card-back mazo-c2"></div>
+            <div class="card-back mazo-c1" id="mazo-c1">⊗</div>
+          </div>
+          <div class="mazo-label">Mazo</div>
+        </div>
       </div>
-      <div class="baza-result" id="baza-result-display"></div>
-      <div class="arena-slots" id="arena-slots"></div>
-    </div>
-    <div class="history-panel" id="history-panel">
-      <div class="history-title">Bazas</div>
-      <div class="history-list" id="history-list"></div>
-    </div>
-  </div>
-
-  <!-- Bottom zone: cards + action panel side by side -->
-  <div class="bottom-zone">
-
-    <!-- Mano: cartas en fila + info envido -->
-    <div class="hand-area">
-      <div class="hand-row" id="hand-row"></div>
-      <div class="envido-info" id="envido-info"></div>
+      <div class="hand-area">
+        <div class="hand-row" id="hand-row"></div>
+        <div class="envido-info" id="envido-info"></div>
+      </div>
     </div>
 
-    <!-- Cantos panel (a la derecha de las cartas) -->
-    <div class="chant-panel">
-      <div class="chant-turn" id="chant-turn">Turno</div>
-      <div class="chant-btns" id="chant-btns"></div>
+    <!-- Columna lateral: historial de bazas arriba, cantos abajo.
+         Así los botones pueden crecer sin mover la mesa. -->
+    <div class="side-col">
+      <div class="history-panel" id="history-panel">
+        <div class="history-title">Bazas</div>
+        <div class="history-list" id="history-list"></div>
+      </div>
+      <div class="chant-panel">
+        <div class="chant-turn" id="chant-turn">Turno</div>
+        <div class="chant-btns" id="chant-btns"></div>
+      </div>
     </div>
-
   </div>
 
 </div>
@@ -256,6 +262,10 @@ function ensureFonts() {
 function mountApp() {
   ensureFonts();
   document.body.innerHTML = APP_HTML;
+  // En pantallas angostas el log arranca cerrado para no tapar la mesa.
+  if (window.innerWidth < 1200) {
+    document.getElementById('log-sidebar')?.classList.add('closed');
+  }
 }
 
 declare global {
