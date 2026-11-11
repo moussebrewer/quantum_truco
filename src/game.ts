@@ -422,6 +422,7 @@ function createBaseState(cfg) {
   state.playOrder = circularOrder(Array.from({length: state.tableSize}, (_, i) => i), state.leaderSeat, state.tableSize);
   state.activeSeat = state.playOrder[0];
   state.pendingChant = null;
+  state.pica = cfg.pica !== false;
   state.aiMode = 'human';
   state.aiSeat = null;
   state.matchEnded = false;
@@ -469,8 +470,7 @@ function newGame(cfg) {
   for (let seat=0; seat<tableSize; seat++) {
     const hand = deck.deal(3);
     players.push({
-      name: tableSize===2 ? (seat===0 ? 'Jugador 1' : 'Jugador 2')
-                          : (seat===0 ? 'J1 (Eq.A)' : seat===1 ? 'J2 (Eq.B)' : seat===2 ? 'J3 (Eq.A)' : 'J4 (Eq.B)'),
+      name: `Jugador ${seat + 1}`,
       seat,
       team: teamOf(seat),
       hand: hand.slice(),  // quantum cards
@@ -549,6 +549,15 @@ export function restartGame() { G = null; if (runtime.resetAIState) runtime.rese
 
 
 export function allSeats() { return Array.from({length: G.tableSize}, (_, i) => i); }
+
+// Asientos que juegan la mano en curso: todos, o los dos de un duelo de pica-pica.
+export function handSeats(state = G) {
+  return state.duelSeats || Array.from({ length: state.tableSize }, (_, i) => i);
+}
+// Mano de la mano en curso (en un duelo, el primero de la pareja).
+export function handMano(state = G) {
+  return state.duelSeats ? state.duelSeats[0] : state.manoSeat;
+}
 
 // ── pass-phone flow ──────────────────────────────────────────
 
@@ -642,10 +651,12 @@ export function canOpenEnvido(state = G, seat = state?.activeSeat) {
   if (env.resolved || env.calls.length > 0 || state.chant.florBlockedEnvido) return false;
   if (state.bet.level > 0) return false;
   if (state.playsThisTrick?.[seat]) return false;
-  if (state.tableSize > 2) {
+  const seats = handSeats(state);
+  if (!seats.includes(seat)) return false;
+  if (seats.length > 2) {
     // De a cuatro canta el pie de cada equipo (los dos últimos en jugar).
-    const order = circularOrder(Array.from({ length: state.tableSize }, (_, i) => i), state.manoSeat, state.tableSize);
-    if (order.indexOf(seat) < state.tableSize - 2) return false;
+    const order = circularOrder(seats, handMano(state), state.tableSize);
+    if (order.indexOf(seat) < seats.length - 2) return false;
   }
   return true;
 }
@@ -1133,9 +1144,9 @@ function resolveTrick() {
       G.activeSeat = winner.seat;
       uiLog(`Baza ${G.trickIdx+1}: Equipo ${winner.team} · ${G.players[winner.seat].name}`, 'important');
     } else {
-      G.leaderSeat = G.manoSeat;
-      G.activeSeat = G.manoSeat;
-      uiLog(`Baza ${G.trickIdx+1}: PARDA — sale el mano (${G.players[G.manoSeat].name})`, 'important');
+      G.leaderSeat = handMano();
+      G.activeSeat = handMano();
+      uiLog(`Baza ${G.trickIdx+1}: PARDA — sale el mano (${G.players[handMano()].name})`, 'important');
     }
 
     const w0 = G.trickWinners.filter(w => w === 0).length;
@@ -1181,9 +1192,9 @@ function resolveTrick() {
         G.activeSeat = winner.seat;
         uiLog(`Baza ${G.trickIdx+1}: Equipo ${winner.team} · ${G.players[winner.seat].name}`, 'important');
       } else {
-        G.leaderSeat = G.manoSeat;
-        G.activeSeat = G.manoSeat;
-        uiLog(`Baza ${G.trickIdx+1}: PARDA — sale el mano (${G.players[G.manoSeat].name})`, 'important');
+        G.leaderSeat = handMano();
+        G.activeSeat = handMano();
+        uiLog(`Baza ${G.trickIdx+1}: PARDA — sale el mano (${G.players[handMano()].name})`, 'important');
       }
 
       const w0 = G.trickWinners.filter(w => w === 0).length;
@@ -1240,7 +1251,7 @@ function animateCollapse(cb) {
 function nextTrick() {
   G.trickIdx++;
   G.playsThisTrick = {};
-  G.playOrder      = circularOrder(allSeats(), G.leaderSeat, G.tableSize);
+  G.playOrder      = circularOrder(handSeats(), G.leaderSeat, G.tableSize);
   G.playOrderIdx   = 0;
   G.phase          = 'play';
   G.activeSeat     = G.playOrder[0];
@@ -1263,19 +1274,19 @@ export function startNewHand() {
 }
 
 function settleChants(includeTruco) {
-  // Collapse all remaining cards
-  G.players.forEach(p => {
-    G.deck.collapseAll([...p.hand, ...p.played]);
-  });
+  // Colapsan las cartas que quedan de quienes jugaron esta mano (en un
+  // duelo de pica-pica, solo las de los dos duelistas).
+  const seatsInHand = handSeats();
   const finalCards = {};
-  G.players.forEach(p => {
-    finalCards[p.seat] = [...p.hand, ...p.played]
-      .map(q => q.collapsedTo).filter(Boolean);
+  seatsInHand.forEach(s => {
+    const p = G.players[s];
+    G.deck.collapseAll([...p.hand, ...p.played]);
+    finalCards[s] = [...p.hand, ...p.played].map(q => q.collapsedTo).filter(Boolean);
   });
 
   // ── Truco ──
   if (includeTruco) {
-    const tw  = resolveHandTruco(G.trickWinners, teamOf(G.manoSeat));
+    const tw  = resolveHandTruco(G.trickWinners, teamOf(handMano()));
     const pts = TRUCO_LEVELS[G.bet.level].pts;
     G.handScore[tw] += pts;
     uiLog(`Truco: Eq ${tw} gana ${pts} pts.`, 'points');
@@ -1285,10 +1296,10 @@ function settleChants(includeTruco) {
   const env = G.chant.envido;
   if (env.accepted && env.resolved) {
     const pts = envidoTotalIfAccepted(env.calls, env.callerTeam, G.target, G.scores);
-    const res = settleEnvido(finalCards, allSeats(), G.players, G.handScore, teamOf(G.manoSeat), pts);
+    const res = settleEnvido(finalCards, handSeats(), G.players, G.handScore, teamOf(handMano()), pts);
     if (!G.handChant) G.handChant = [0, 0];
     G.handChant[res.winner] += pts;
-    const playerLines = allSeats().map(seat => {
+    const playerLines = handSeats().map(seat => {
       const name = G.players[seat].name;
       const score = res.teamScores[teamOf(seat)] ?? 0;
       return `${name}: ${score}`;
@@ -1323,7 +1334,7 @@ function settleChants(includeTruco) {
     let text = '';
 
     if (valid.length === 2) {
-      const winner = best[0] > best[1] ? 0 : best[1] > best[0] ? 1 : teamOf(G.manoSeat);
+      const winner = best[0] > best[1] ? 0 : best[1] > best[0] ? 1 : teamOf(handMano());
       addChantPoints(winner, stake);
       text = `${label}: ${best[0]} contra ${best[1]}. ${teamName(winner)} cobra ${stake}.`;
     } else if (valid.length === 1) {
@@ -1355,7 +1366,7 @@ function applyHandScore() {
     const a = G.scores[0] >= G.target, b = G.scores[1] >= G.target;
     if (a && b) {
       if (G.scores[0] !== G.scores[1]) return G.scores[0] > G.scores[1] ? 0 : 1;
-      return teamOf(G.manoSeat);
+      return teamOf(handMano());
     }
     return a ? 0 : b ? 1 : null;
   };
@@ -1384,12 +1395,17 @@ function applyHandScore() {
     scores: [...G.scores],
     envido: G.lastEnvido || null,
     florText: G.lastFlorText || null,
+    // Los nombres de quienes jugaron (en pica-pica, los dos duelistas).
+    duel: G.duelSeats ? [...G.duelSeats] : null,
+    // false cuando lo que sigue es el otro duelo, con las mismas cartas.
+    redeal: winner !== null || !hasNextDuel(),
   };
   G.lastEnvido = null;
   G.lastFlorText = null;
 
   const doNext = () => {
     if (winner !== null) showWin(winner);
+    else if (hasNextDuel()) startNextDuel();
     else dealNewHand();
   };
 
@@ -1405,20 +1421,22 @@ function applyHandScore() {
   }
 }
 
-function dealNewHand() {
-  G.handNum++;
-  G.manoSeat = (G.manoSeat + 1) % G.tableSize;
+// ── Pica-pica ────────────────────────────────────────────────
+// De a cuatro, mientras el equipo que va ganando tiene entre 5 puntos y
+// 5 menos que el objetivo, se alterna una mano "redonda" (todos contra
+// todos, en equipo) con una de pica-pica: cada jugador juega mano a mano
+// contra el rival que tiene al lado, un duelo después del otro, y los
+// puntos de los dos duelos se suman a los equipos.
+function shouldPlayPica() {
+  if (G.tableSize !== 4 || G.pica === false) return false;
+  const top = Math.max(G.scores[0], G.scores[1]);
+  if (top < 5 || top >= G.target - 5) return false;
+  return !G.lastHandWasPica;
+}
 
-  const deck = new QuantumDeck(null);
-  G.deck = deck;
-  G.players.forEach((p, seat) => {
-    const hand = deck.deal(3);
-    p.hand    = hand;
-    p.played  = [];
-    p.metric      = envidoMetric(hand);
-    p.florMetric  = florMetric(hand);
-  });
-
+// Deja listo el estado de una mano (o de un duelo) sin repartir.
+function resetHandState(seats) {
+  G.duelSeats = seats || null;
   G.bet       = { level: 0, lastRaiserTeam: null };
   G.chant     = {
     flor: { sungBySeat:{}, declarations:{}, contraflorCalled:false,
@@ -1436,11 +1454,55 @@ function dealNewHand() {
   G.handChant    = [0, 0];
   G.handSettled  = false;
   G.playsThisTrick = {};
-  G.leaderSeat   = G.manoSeat;
-  G.playOrder    = circularOrder(allSeats(), G.leaderSeat, G.tableSize);
+  G.leaderSeat   = handMano();
+  G.playOrder    = circularOrder(handSeats(), G.leaderSeat, G.tableSize);
   G.playOrderIdx = 0;
   G.activeSeat   = G.playOrder[0];
   G.phase        = 'chant';
+}
+
+// ¿Queda otro duelo de pica-pica por jugar en esta mano?
+function hasNextDuel() {
+  return !!G.duels && G.duelIdx < G.duels.length - 1;
+}
+
+function startNextDuel() {
+  G.duelIdx++;
+  resetHandState(G.duels[G.duelIdx]);
+  const [a, b] = G.duelSeats;
+  uiLog(`Pica-pica: ${G.players[a].name} contra ${G.players[b].name}.`, 'important');
+  if (headlessMode || typeof document === 'undefined') return;
+  if (runtime.showTrucoCallToast) runtime.showTrucoCallToast(`Pica-pica: ${G.players[a].name} vs ${G.players[b].name}`, 1800);
+  passTo(G.activeSeat);
+}
+
+function dealNewHand() {
+  G.handNum++;
+  G.manoSeat = (G.manoSeat + 1) % G.tableSize;
+
+  const deck = new QuantumDeck(null);
+  G.deck = deck;
+  G.players.forEach((p, seat) => {
+    const hand = deck.deal(3);
+    p.hand    = hand;
+    p.played  = [];
+    p.metric      = envidoMetric(hand);
+    p.florMetric  = florMetric(hand);
+  });
+
+  if (shouldPlayPica()) {
+    const m = G.manoSeat;
+    G.duels = [[m, (m + 1) % 4], [(m + 2) % 4, (m + 3) % 4]];
+    G.duelIdx = 0;
+    G.lastHandWasPica = true;
+    resetHandState(G.duels[0]);
+    uiLog(`Mano de pica-pica: ${G.players[G.duels[0][0]].name} contra ${G.players[G.duels[0][1]].name}, y después ${G.players[G.duels[1][0]].name} contra ${G.players[G.duels[1][1]].name}.`, 'important');
+  } else {
+    G.duels = null;
+    G.duelIdx = 0;
+    G.lastHandWasPica = false;
+    resetHandState(null);
+  }
 
   // Show new hand announcement then animate the deal
   animateDeal(() => passTo(G.activeSeat));
@@ -1540,7 +1602,7 @@ function showWin(winnerTeam) {
     : (G.scores[0] >= G.target ? 0 : 1);
   const name   = G.tableSize === 2
     ? G.players[winner === 0 ? 0 : 1].name
-    : `Equipo ${winner}`;
+    : `Equipo ${winner === 0 ? 'A' : 'B'}`;
   G.matchEnded = true;
   G.winnerTeam = winner;
   G.winnerName = name;
@@ -1563,6 +1625,8 @@ export function validateIntentActor(seat, type) {
 // Rival que responde un canto: el que sigue en la ronda (los equipos se
 // sientan alternados, así que el siguiente siempre es del otro equipo).
 export function getOppSeat(seat) {
+  const seats = handSeats();
+  if (seats.length === 2) return seats.find(s => s !== seat) ?? ((seat + 1) % G.tableSize);
   return (seat + 1) % G.tableSize;
 }
 

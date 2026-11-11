@@ -94,15 +94,37 @@ function hiddenCard() {
 }
 
 function computeStatusText(meta, state, seat) {
-  if (!meta.players[0].token || !meta.players[1].token) return `Sala ${meta.roomCode} · esperando rival`;
-  if (!meta.players[1 - seat].connected) return `Sala ${meta.roomCode} · rival desconectado`;
-  if (state?.matchEnded && meta.players[seat].rematchRequested && !meta.players[1 - seat].rematchRequested) {
-    return `Sala ${meta.roomCode} · revancha pedida`;
+  const total = meta.players.length;
+  const joined = meta.players.filter(p => p.token).length;
+  if (joined < total) {
+    return total === 2
+      ? `Sala ${meta.roomCode} · esperando rival`
+      : `Sala ${meta.roomCode} · esperando jugadores (${joined}/${total})`;
   }
-  if (state?.matchEnded && !meta.players[seat].rematchRequested && meta.players[1 - seat].rematchRequested) {
-    return `Sala ${meta.roomCode} · rival quiere revancha`;
+  const away = meta.players.filter((p, i) => i !== seat && !p.connected).length;
+  if (away > 0) {
+    return total === 2
+      ? `Sala ${meta.roomCode} · rival desconectado`
+      : `Sala ${meta.roomCode} · ${away === 1 ? 'un jugador desconectado' : `${away} jugadores desconectados`}`;
   }
-  return `Sala ${meta.roomCode} · Jugador ${seat + 1}`;
+  if (state?.matchEnded) {
+    const asked = meta.players.filter(p => p.rematchRequested).length;
+    if (meta.players[seat].rematchRequested && asked < total) return `Sala ${meta.roomCode} · revancha pedida (${asked}/${total})`;
+    if (asked > 0) return `Sala ${meta.roomCode} · piden revancha (${asked}/${total})`;
+  }
+  return `Sala ${meta.roomCode} · ${state?.players?.[seat]?.name || `Jugador ${seat + 1}`}`;
+}
+
+function allJoined(meta) {
+  return meta.players.every(p => !!p.token);
+}
+
+function othersConnected(meta, seat) {
+  return meta.players.every((p, i) => i === seat || !!p.connected);
+}
+
+function emptyPlayer() {
+  return { token: null, connected: false, rematchRequested: false, left: false };
 }
 
 function filterStateForSeat(fullState, seat, meta) {
@@ -112,8 +134,8 @@ function filterStateForSeat(fullState, seat, meta) {
   state.onlineMode = true;
   state.viewerSeat = seat;
   state.roomCode = meta.roomCode;
-  state.roomReady = !!meta.players[0].token && !!meta.players[1].token;
-  state.opponentConnected = !!meta.players[1 - seat].connected;
+  state.roomReady = allJoined(meta);
+  state.opponentConnected = othersConnected(meta, seat);
   state.statusText = computeStatusText(meta, state, seat);
   state.players = state.players.map((player) => {
     if (player.seat === seat) return player;
@@ -258,7 +280,12 @@ export default {
       const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(code));
       const req = new Request('https://room/create', {
         method: 'POST',
-        body: JSON.stringify({ roomCode: code, target: body.target || 15, conFlor: !!body.conFlor }),
+        body: JSON.stringify({
+          roomCode: code,
+          target: body.target || 15,
+          conFlor: !!body.conFlor,
+          tableSize: body.tableSize === 4 ? 4 : 2,
+        }),
       });
       return withCors(await stub.fetch(req), request);
     }
@@ -307,10 +334,7 @@ export class RoomDurableObject {
       this.meta = {
         roomCode: '',
         cfg: { tableSize: 2, target: 15, conFlor: false, mode: 'online_1v1' },
-        players: [
-          { token: null, connected: false, rematchRequested: false, left: false },
-          { token: null, connected: false, rematchRequested: false, left: false },
-        ],
+        players: [emptyPlayer(), emptyPlayer()],
       };
     }
     if (this.game) this.game = rehydrateGameState(this.game);
@@ -327,10 +351,9 @@ export class RoomDurableObject {
   }
 
   async ensureGame() {
-    if (!this.game && this.meta.players[0].token && this.meta.players[1].token) {
+    if (!this.game && allJoined(this.meta)) {
       this.game = createHeadlessGame(this.meta.cfg);
-      this.meta.players[0].rematchRequested = false;
-      this.meta.players[1].rematchRequested = false;
+      this.meta.players.forEach(p => { p.rematchRequested = false; });
       await this.persist();
     }
   }
@@ -359,7 +382,7 @@ export class RoomDurableObject {
       this.send(socket, {
         type,
         roomReady: true,
-        opponentConnected: !!this.meta.players[1 - seat].connected,
+        opponentConnected: othersConnected(this.meta, seat),
         statusText: filtered.statusText,
         state: filtered,
       });
@@ -382,7 +405,7 @@ export class RoomDurableObject {
       this.meta.players[seat].token = null;
       this.sockets.delete(seat);
       await this.persist();
-      if (this.sockets.has(1 - seat)) this.broadcastState('presence_update');
+      if (this.sockets.size > 0) this.broadcastState('presence_update');
       return;
     }
 
@@ -407,14 +430,13 @@ export class RoomDurableObject {
     if (intent.type === 'request_rematch') {
       this.meta.players[seat].rematchRequested = true;
       await this.persist();
-      if (this.meta.players[0].rematchRequested && this.meta.players[1].rematchRequested) {
+      if (this.meta.players.every(p => p.rematchRequested)) {
         this.game = createHeadlessGame(this.meta.cfg);
-        this.meta.players[0].rematchRequested = false;
-        this.meta.players[1].rematchRequested = false;
+        this.meta.players.forEach(p => { p.rematchRequested = false; });
         await this.persist();
         this.broadcastState();
       } else {
-        this.send(socket, { type: 'rematch_waiting', statusText: 'Revancha pedida. Esperando al rival…' });
+        this.send(socket, { type: 'rematch_waiting', statusText: 'Revancha pedida. Esperando a los demás…' });
         this.broadcastState('presence_update');
       }
       return;
@@ -435,29 +457,39 @@ export class RoomDurableObject {
     const url = new URL(request.url);
 
     if (request.method === 'POST' && url.pathname === '/create') {
-      if (this.meta.players[0].token || this.meta.players[1].token) {
+      if (this.meta.roomCode || this.meta.players.some(p => p.token)) {
         return json({ error: 'La sala ya existe.' }, 409);
       }
       const body = await request.json().catch(() => ({}));
+      const tableSize = body.tableSize === 4 ? 4 : 2;
       this.meta.roomCode = body.roomCode;
       this.meta.cfg = {
-        tableSize: 2,
+        tableSize,
         target: body.target || 15,
         conFlor: !!body.conFlor,
         mode: 'online_1v1',
       };
-      this.meta.players[0] = { token: randomToken(), connected: false, rematchRequested: false, left: false };
+      this.meta.players = Array.from({ length: tableSize }, emptyPlayer);
+      this.meta.players[0].token = randomToken();
       await this.persist();
-      return json({ roomId: this.meta.roomCode, roomCode: this.meta.roomCode, token: this.meta.players[0].token, seat: 0 });
+      return json({
+        roomId: this.meta.roomCode, roomCode: this.meta.roomCode,
+        token: this.meta.players[0].token, seat: 0, tableSize,
+      });
     }
 
     if (request.method === 'POST' && url.pathname === '/join') {
-      if (!this.meta.players[0].token) return json({ error: 'La sala no existe.' }, 404);
-      if (this.meta.players[1].token) return json({ error: 'La sala ya está llena.' }, 409);
-      this.meta.players[1] = { token: randomToken(), connected: false, rematchRequested: false, left: false };
+      if (!this.meta.roomCode) return json({ error: 'La sala no existe.' }, 404);
+      // Entra en el primer asiento libre (también el de alguien que se fue).
+      const seat = this.meta.players.findIndex(p => !p.token);
+      if (seat < 0) return json({ error: 'La sala ya está llena.' }, 409);
+      this.meta.players[seat] = { ...emptyPlayer(), token: randomToken() };
       await this.ensureGame();
       await this.persist();
-      return json({ roomId: this.meta.roomCode, roomCode: this.meta.roomCode, token: this.meta.players[1].token, seat: 1 });
+      return json({
+        roomId: this.meta.roomCode, roomCode: this.meta.roomCode,
+        token: this.meta.players[seat].token, seat, tableSize: this.meta.players.length,
+      });
     }
 
     if (url.pathname === '/connect' || url.pathname.startsWith('/api/rooms/connect/')) {

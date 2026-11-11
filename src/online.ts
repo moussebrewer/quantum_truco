@@ -244,8 +244,15 @@ async function presentEnvelope(envelope) {
   applyEnvelope(envelope);
 
   if (hand && !next.matchEnded) {
-    await new Promise(resolve => animateDeal(resolve));
-    renderCurrentGame();
+    // Entre los dos duelos de un pica-pica no se reparte de nuevo.
+    if (hand.redeal !== false) {
+      await new Promise(resolve => animateDeal(resolve));
+      renderCurrentGame();
+    }
+    if (next.duelSeats) {
+      const [a, b] = next.duelSeats;
+      showTrucoCallToast(`Pica-pica: ${next.players[a].name} vs ${next.players[b].name}`, 2000);
+    }
   }
 }
 
@@ -292,8 +299,12 @@ async function presentHandEnd(hand) {
     showTrucoCallToast(hand.florText, 3000);
     await sleep(3200);
   }
-  const names = [G?.players?.[0]?.name || 'Jugador 1', G?.players?.[1]?.name || 'Jugador 2'];
-  showTrucoCallToast(`Mano ${hand.handNum} · ${names[0]} +${hand.handScore[0]} · ${names[1]} +${hand.handScore[1]}`, 2200);
+  const four = (G?.players?.length || 2) > 2;
+  const names = four
+    ? ['Equipo A', 'Equipo B']
+    : [G?.players?.[0]?.name || 'Jugador 1', G?.players?.[1]?.name || 'Jugador 2'];
+  const title = hand.duel ? `Pica-pica (mano ${hand.handNum})` : `Mano ${hand.handNum}`;
+  showTrucoCallToast(`${title} · ${names[0]} +${hand.handScore[0]} · ${names[1]} +${hand.handScore[1]}`, 2200);
   await sleep(2400);
 }
 
@@ -327,7 +338,7 @@ function handleMessage(payload) {
 
   if (payload.type === 'room_waiting') {
     setupCfg.mode = 'online_1v1';
-    setStatus(`Sala ${payload.roomCode}: esperando rival…`, 'warn');
+    setStatus(payload.statusText || `Sala ${payload.roomCode}: esperando rival…`, 'warn');
     setHeaderStatus(`Sala ${payload.roomCode}`);
     syncLeaveButton(false);
     showScreenById('screen-setup');
@@ -452,6 +463,7 @@ export async function createOnlineRoomFromUI() {
     const data = await postJson('/api/rooms/create', {
       target: setupCfg.target,
       conFlor: !!setupCfg.conFlor,
+      tableSize: setupCfg.tableSize === 4 ? 4 : 2,
     });
     session.roomId = data.roomId;
     session.roomCode = data.roomCode;
@@ -461,7 +473,9 @@ export async function createOnlineRoomFromUI() {
     persistSession();
     const input = document.getElementById('room-code-input');
     if (input) input.value = data.roomCode;
-    setStatus(`Sala ${data.roomCode} creada. Compartí el código y esperá al rival.`, 'ok');
+    setStatus(data.tableSize === 4
+      ? `Sala ${data.roomCode} creada para 4. Compartí el código: los equipos se arman por orden de llegada (1º y 3º contra 2º y 4º).`
+      : `Sala ${data.roomCode} creada. Compartí el código y esperá al rival.`, 'ok');
     connectSocket();
   } catch (err) {
     setStatus(err?.message || 'No se pudo crear la sala.', 'err');

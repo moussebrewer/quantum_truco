@@ -65,7 +65,7 @@ const APP_HTML = `<!-- ═══════════════════
       <span class="setup-label">Modo</span>
       <div class="setup-options" id="opts-mode">
         <button class="opt-btn selected" data-group="mode" data-val="human">👥 Humanos</button>
-        <button class="opt-btn" data-group="mode" data-val="online_1v1">🌐 Online 1v1</button>
+        <button class="opt-btn" data-group="mode" data-val="online_1v1">🌐 Online</button>
         <button class="opt-btn" data-group="mode" data-val="ai_medium">🃏 El Pibe</button>
         <button class="opt-btn" data-group="mode" data-val="ai_hard">🎩 Citadino</button>
         <button class="opt-btn" data-group="mode" data-val="ai_expert">🧉 Gaucho Digital</button>

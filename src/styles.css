@@ -230,7 +230,7 @@ body {
 .score-team-head.t1 { color: var(--accent-b); }
 .score-team-name {
   font-size: 0.7rem; letter-spacing: 0.08em;
-  max-width: 13ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 17ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .score-num { font-size: 1.05rem; font-weight: 700; line-height: 1; }
 .score-sep { color: var(--muted); font-size: 0.8rem; font-style: italic; padding-top: 2px; }

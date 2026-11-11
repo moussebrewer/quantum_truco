@@ -105,7 +105,9 @@ export function initSetupOptions() {
     const onlineDivider = document.getElementById('online-divider');
     const startBtn = document.getElementById('btn-start-game');
     const isOnline = mode === 'online_1v1';
-    const forceTwo = isOnline || mode !== 'human';
+    // Contra la IA siempre es mano a mano; entre personas (en la misma
+    // pantalla u online) puede ser de a 2 o de a 4.
+    const forceTwo = !isOnline && mode !== 'human';
 
     if (forceTwo) {
       document.querySelectorAll('.opt-btn[data-group="players"]').forEach(b => b.classList.remove('selected'));
@@ -234,11 +236,15 @@ function updateHeader() {
   renderTally('score-tally-1', scores[1], 1);
   for (const t of [0, 1]) {
     const nameEl = document.getElementById(`score-name-${t}`);
-    if (nameEl) nameEl.textContent = teamLabel(t);
+    const mine = G.onlineMode && G.tableSize > 2 && teamOf(getViewerSeatForRender()) === t;
+    if (nameEl) nameEl.textContent = teamLabel(t) + (mine ? ' · vos' : '');
     const numEl = document.getElementById(`score-num-${t}`);
     if (numEl) numEl.textContent = String(scores[t]);
   }
-  document.getElementById('hdr-round').textContent = `Mano ${handNum} · Baza ${G.trickIdx+1}`;
+  const duel = G.duelSeats
+    ? ` · Pica-pica: ${G.players[G.duelSeats[0]].name} vs ${G.players[G.duelSeats[1]].name}`
+    : '';
+  document.getElementById('hdr-round').textContent = `Mano ${handNum} · Baza ${G.trickIdx+1}${duel}`;
   const lvl = TRUCO_LEVELS[bet.level];
   document.getElementById('hdr-bet').textContent = `Truco: ${lvl.name} (${lvl.pts} pt${lvl.pts>1?'s':''})`;
 }
@@ -984,6 +990,7 @@ export function showEnvidoAnnouncement(res, pts, finalCards) {
     const team = teamOf(seat);
     const isWinner = team === res.winner;
     const cards = finalCards[seat] || [];
+    if (!cards.length) return; // no jugó esta mano (pica-pica)
     const score = res.teamScores[team] ?? 0;
     const contribs = envidoContributions(cards);
 
