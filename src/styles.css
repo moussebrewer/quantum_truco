@@ -1108,3 +1108,22 @@ body {
 @media (max-height: 520px) {
   .turn-banner { min-height: 0; padding: 1px 10px; font-size: 0.64rem; }
 }
+
+/* ── PANTALLA DE FINAL: acciones ─────────── */
+.win-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+.win-status { min-height: 1.4em; color: var(--muted); font-size: 0.9rem; font-style: italic; }
+.continue-btn.secondary { border-color: rgba(255,255,255,0.18); color: var(--muted); background: none; }
+.continue-btn.secondary:hover { border-color: rgba(255,255,255,0.4); color: var(--text); background: rgba(255,255,255,0.05); }
+
+/* ── MESA DE A SEIS ──────────────────────── */
+#screen-game.six-players {
+  --hand-card-w: clamp(66px, min(19vw, 17vh), 120px);
+  --table-card-w: clamp(40px, min(12vw, 11vh), 78px);
+}
+.six-players .arena-slots { flex-wrap: wrap; gap: clamp(6px, 1.6vw, 16px); row-gap: 14px; max-width: 100%; }
+.six-players .opp-fan .card-back { margin: 0 -8px; }
+.six-players .slot-name { font-size: 0.54rem; }
+/* En celular, con seis cartas en la mesa el mazo se va a la esquina. */
+@media (max-width: 720px) {
+  .six-players .mazo-stack { top: 8px; right: 8px; transform: none; --card-w: 30px; }
+}

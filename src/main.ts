@@ -28,6 +28,7 @@ import {
 
 import {
   configureGameRuntime,
+  setupCfg,
   toggleFlor,
   startGame as startLocalGame,
   restartGame as restartLocalGame,
@@ -41,6 +42,7 @@ import {
   leaveOnlineRoom,
   requestOnlineRematch,
   isOnlineClientMode,
+  hasOnlineSession,
 } from './online';
 
 import {
@@ -78,6 +80,7 @@ const APP_HTML = `<!-- ═══════════════════
       <div class="setup-options" id="opts-players">
         <button class="opt-btn selected" data-group="players" data-val="2">2</button>
         <button class="opt-btn" data-group="players" data-val="4">4</button>
+        <button class="opt-btn" data-group="players" data-val="6">6</button>
       </div>
     </div>
     <div class="setup-divider"></div>
@@ -225,7 +228,11 @@ const APP_HTML = `<!-- ═══════════════════
   <div class="win-title" id="win-title">¡GANARON!</div>
   <div class="win-sub" id="win-sub">Equipo victorioso</div>
   <div class="win-score" id="win-score">15 — 8</div>
-  <button class="continue-btn" onclick="restartGame()">NUEVA PARTIDA</button>
+  <div class="win-status" id="win-status"></div>
+  <div class="win-actions">
+    <button class="continue-btn" id="btn-win-again" onclick="restartGame()">Nueva partida</button>
+    <button class="continue-btn secondary" id="btn-win-menu" onclick="backToMenu()">Volver al menú</button>
+  </div>
 </div>
 
 <!-- Truco acceptance toast -->
@@ -335,20 +342,28 @@ bootstrapOnlineUi();
 
 window.toggleFlor = toggleFlor;
 window.startGame = () => {
-  if (isOnlineClientMode()) {
+  if (setupCfg.mode === 'online_1v1') {
     const codeInput = document.getElementById('room-code-input') as HTMLInputElement | null;
     const code = (codeInput?.value || '').trim();
     if (code) joinOnlineRoomFromUI();
     else createOnlineRoomFromUI();
     return;
   }
+  // Si quedó guardada una sala online vieja, se abandona antes de jugar offline.
+  if (hasOnlineSession()) leaveOnlineRoom();
   startLocalGame();
+};
+// Salida de la pantalla de final: siempre vuelve al menú, y si la partida
+// era online abandona la sala (para que no se reabra sola al recargar).
+window.backToMenu = () => {
+  if (hasOnlineSession()) leaveOnlineRoom();
+  else restartLocalGame();
 };
 window.dismissPass = dismissPass;
 window.toggleLog = toggleLog;
 window.toggleChat = toggleChat;
 window.restartGame = () => {
-  if (isOnlineClientMode()) {
+  if (hasOnlineSession()) {
     requestOnlineRematch();
     return;
   }

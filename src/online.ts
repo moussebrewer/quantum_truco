@@ -325,7 +325,7 @@ function applyEnvelope(envelope) {
   if (state.matchEnded) {
     const winnerTeam = state.winnerTeam ?? 0;
     const winnerName = state.winnerName || (winnerTeam === 0 ? state.players?.[0]?.name : state.players?.[1]?.name) || 'Ganador';
-    showWinState(`¡${String(winnerName).toUpperCase()} GANA!`, winnerTeam === 0 ? 'Equipo 0 victorioso' : 'Equipo 1 victorioso', `${state.scores[0]} — ${state.scores[1]}`);
+    showWinState(`¡${String(winnerName).toUpperCase()} GANA!`, 'Partida online terminada', `${state.scores[0]} — ${state.scores[1]}`);
     showScreenById('screen-win');
   } else {
     showScreenById('screen-game');
@@ -447,6 +447,11 @@ export function sendChat(text) {
   sendAction({ type: 'chat', text });
 }
 
+// ¿Hay una sala online activa o guardada en este navegador?
+export function hasOnlineSession() {
+  return !!session.roomId;
+}
+
 export function isOnlineClientMode() {
   return setupCfg.mode === 'online_1v1' || !!session.roomId;
 }
@@ -463,7 +468,7 @@ export async function createOnlineRoomFromUI() {
     const data = await postJson('/api/rooms/create', {
       target: setupCfg.target,
       conFlor: !!setupCfg.conFlor,
-      tableSize: setupCfg.tableSize === 4 ? 4 : 2,
+      tableSize: [2, 4, 6].includes(setupCfg.tableSize) ? setupCfg.tableSize : 2,
     });
     session.roomId = data.roomId;
     session.roomCode = data.roomCode;
@@ -473,8 +478,8 @@ export async function createOnlineRoomFromUI() {
     persistSession();
     const input = document.getElementById('room-code-input');
     if (input) input.value = data.roomCode;
-    setStatus(data.tableSize === 4
-      ? `Sala ${data.roomCode} creada para 4. Compartí el código: los equipos se arman por orden de llegada (1º y 3º contra 2º y 4º).`
+    setStatus(data.tableSize > 2
+      ? `Sala ${data.roomCode} creada para ${data.tableSize}. Compartí el código: los equipos se arman por orden de llegada, intercalados (${data.tableSize === 6 ? '1º, 3º y 5º contra 2º, 4º y 6º' : '1º y 3º contra 2º y 4º'}).`
       : `Sala ${data.roomCode} creada. Compartí el código y esperá al rival.`, 'ok');
     connectSocket();
   } catch (err) {

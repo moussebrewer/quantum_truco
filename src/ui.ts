@@ -82,6 +82,13 @@ export function showWinScreen(title, subtitle, score) {
   if (titleEl) titleEl.textContent = title;
   if (subEl) subEl.textContent = subtitle;
   if (scoreEl) scoreEl.textContent = score;
+  // Online, "otra partida" es pedirle revancha a la sala; el estado de la
+  // sala (rival desconectado, revancha pedida) se muestra debajo.
+  const online = !!G?.onlineMode;
+  const again = document.getElementById('btn-win-again');
+  if (again) again.textContent = online ? 'Pedir revancha' : 'Nueva partida';
+  const status = document.getElementById('win-status');
+  if (status) status.textContent = online ? (G.statusText || '') : '';
 }
 
 function getEnvidoOverlayEl() {
@@ -221,7 +228,10 @@ export function teamLabel(team) {
 
 export function renderGame() {
   const screen = document.getElementById('screen-game');
-  if (screen) screen.classList.toggle('four-players', G.tableSize > 2);
+  if (screen) {
+    screen.classList.toggle('four-players', G.tableSize > 2);
+    screen.classList.toggle('six-players', G.tableSize > 4);
+  }
   updateHeader();
   renderArena();
   renderHand();

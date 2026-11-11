@@ -284,7 +284,7 @@ export default {
           roomCode: code,
           target: body.target || 15,
           conFlor: !!body.conFlor,
-          tableSize: body.tableSize === 4 ? 4 : 2,
+          tableSize: [2, 4, 6].includes(body.tableSize) ? body.tableSize : 2,
         }),
       });
       return withCors(await stub.fetch(req), request);
@@ -461,7 +461,7 @@ export class RoomDurableObject {
         return json({ error: 'La sala ya existe.' }, 409);
       }
       const body = await request.json().catch(() => ({}));
-      const tableSize = body.tableSize === 4 ? 4 : 2;
+      const tableSize = [2, 4, 6].includes(body.tableSize) ? body.tableSize : 2;
       this.meta.roomCode = body.roomCode;
       this.meta.cfg = {
         tableSize,

@@ -1422,14 +1422,12 @@ function applyHandScore() {
 }
 
 // ── Pica-pica ────────────────────────────────────────────────
-// Reservado para un futuro modo de a seis: de a cuatro NO se juega.
+// Solo de a seis (tres contra tres); de a cuatro NO se juega.
 // Mientras el equipo que va ganando tiene entre 5 puntos y 5 menos que el
 // objetivo, se alterna una mano "redonda" (todos, en equipo) con una de
-// pica-pica: duelos mano a mano, uno después del otro, con las mismas
-// cartas, y los puntos se suman a los equipos.
-// OJO: el armado de duelos de dealNewHand está escrito para cuatro
-// asientos; al sumar el modo de a seis hay que rehacerlo (tres duelos,
-// cada uno contra el rival de enfrente).
+// pica-pica: cada jugador juega mano a mano contra el rival que tiene
+// enfrente, un duelo después del otro, con las mismas cartas repartidas,
+// y los puntos de los tres duelos se suman a los equipos.
 function shouldPlayPica() {
   if (G.tableSize !== 6 || G.pica === false) return false;
   const top = Math.max(G.scores[0], G.scores[1]);
@@ -1494,12 +1492,15 @@ function dealNewHand() {
   });
 
   if (shouldPlayPica()) {
-    const m = G.manoSeat;
-    G.duels = [[m, (m + 1) % 4], [(m + 2) % 4, (m + 3) % 4]];
+    // De a seis, el de enfrente (tres asientos más allá) es siempre rival.
+    // Empieza el duelo del mano y siguen los otros en el orden de la ronda.
+    const m = G.manoSeat, n = G.tableSize, half = n / 2;
+    G.duels = Array.from({ length: half }, (_, i) => [(m + i) % n, (m + i + half) % n]);
     G.duelIdx = 0;
     G.lastHandWasPica = true;
     resetHandState(G.duels[0]);
-    uiLog(`Mano de pica-pica: ${G.players[G.duels[0][0]].name} contra ${G.players[G.duels[0][1]].name}, y después ${G.players[G.duels[1][0]].name} contra ${G.players[G.duels[1][1]].name}.`, 'important');
+    const list = G.duels.map(([a, b]) => `${G.players[a].name} contra ${G.players[b].name}`).join('; ');
+    uiLog(`Mano de pica-pica: ${list}.`, 'important');
   } else {
     G.duels = null;
     G.duelIdx = 0;
@@ -1611,7 +1612,7 @@ function showWin(winnerTeam) {
   G.winnerName = name;
   G.phase = 'match_end';
   if (runtime.showWinScreen) {
-    runtime.showWinScreen(`¡${name.toUpperCase()} GANA!`, winner === 0 ? 'Equipo 0 victorioso' : 'Equipo 1 victorioso', `${G.scores[0]} — ${G.scores[1]}`);
+    runtime.showWinScreen(`¡${name.toUpperCase()} GANA!`, 'Partida terminada', `${G.scores[0]} — ${G.scores[1]}`);
   }
   if (runtime.showScreen) runtime.showScreen('screen-win');
 }
