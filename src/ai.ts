@@ -396,9 +396,7 @@ function makeU(st, seat, kind) {
 // ═════════════════════════════════════════════════════════════
 
 function freshHand() {
-  // rT / rE / rA / rTrap: sorteos de la mano (mentir al truco, mentir al
-  // envido, querer liviano, tender una trampa).
-  return { handNum: -1, trucoPend: 0, envPend: 0, oppTruco: false, rT: Math.random(), rE: Math.random(), rA: Math.random(), rTrap: Math.random() };
+  return { handNum: -1, trucoPend: 0, envPend: 0, oppTruco: false };
 }
 export function aiNewMemory() {
   return {
@@ -495,10 +493,9 @@ function oppEnvFreq(mem) { return clamp((mem.eOpen.open + 0.35 * 6) / (mem.eOpen
 
 const PROF = {
   medium: { name: 'El Pibe', kind: 'pibe', util: 'lin' },
-  hard:   { name: 'Citadino', kind: 'cita', util: 'lin', nT: 14, nEnv: 70, cond: false, temp: 0, bT: 0.10, bE: 0.10, bA: 0.08 },
-  probe:  { name: 'sonda', kind: 'cita', util: 'lin', nT: 30, nEnv: 120, cond: false, temp: 0 },
-  expert: { name: 'Gaucho', kind: 'ev', util: 'cap', nT: 10, nEnv: 60, cond: true, temp: 0, margin: 0.10, greedy: true, vT: [0.62, 0.72, 0.82], vR: 0.62, vE: 0.58, bT: 0.22, bE: 0.20 },
-  legend: { name: 'El Duende', kind: 'ev', util: 'match', nT: 36, nEnv: 160, cond: true, temp: 0.05, margin: 0.05, deep: true, smart: true, trap: true, vT: [0.60, 0.70, 0.80], vR: 0.60, vE: 0.56, bT: 0.26, bE: 0.24 },
+  hard:   { name: 'Citadino', kind: 'cita', util: 'lin', nT: 14, nEnv: 70, cond: false, temp: 0 },
+  expert: { name: 'Gaucho', kind: 'ev', util: 'cap', nT: 16, nEnv: 100, cond: true, temp: 0, margin: 0.10, greedy: true },
+  legend: { name: 'El Duende', kind: 'ev', util: 'match', nT: 36, nEnv: 160, cond: true, temp: 0.05, margin: 0.05, mix: true, deep: true },
 };
 
 function makeCtx(st, seat, level, mem, rng) {
@@ -760,8 +757,7 @@ function pibe(ctx) {
       const s = pibeStrength(ctx);
       if (L < 3 && s >= 0.86) return { type: 'raise_truco', why: `Se agranda: ${TNAME(L + 1)}` };
       const need = [0, 0.50, 0.60, 0.70][L];
-      const ok = s >= need || (L === 1 && ctx.mem.h.rA < 0.06);
-      return { type: 'respond_truco', accept: ok, why: ok ? 'Quiere' : 'No quiere' };
+      return { type: 'respond_truco', accept: s >= need, why: s >= need ? 'Quiere' : 'No quiere' };
     }
     if (pc.type === 'envido') {
       const calls = st.chant.envido.calls;
@@ -781,14 +777,11 @@ function pibe(ctx) {
   if (canOpenEnvido(st, seat)) {
     if (mu >= 25) return { type: 'envido', call: 'real envido', why: 'Canta real envido' };
     if (mu >= 20.5) return { type: 'envido', call: 'envido', why: 'Canta envido' };
-    if (mu < 16 && ctx.mem.h.rE < 0.05) { ctx.mem.h.rE = 2; return { type: 'envido', call: 'envido', why: 'Canta envido' }; }
   }
   if (canTeamRaiseNow(st.bet, ctx.team) && st.bet.level < 3) {
     const s = pibeStrength(ctx);
     const need = [0.72, 0.8, 0.88][st.bet.level];
-    if (s >= need) return { type: 'truco', why: `Canta ${TNAME(st.bet.level + 1)}` };
-    // Muy de vez en cuando se manda un truco sin nada.
-    if (st.bet.level === 0 && s < 0.5 && ctx.mem.h.rT < 0.05) { ctx.mem.h.rT = 2; return { type: 'truco', why: 'Canta truco' }; }
+    if (s >= need || rng() < 0.03) return { type: 'truco', why: `Canta ${TNAME(st.bet.level + 1)}` };
   }
   return pibePlay(ctx);
 }
@@ -831,8 +824,7 @@ function cita(ctx) {
       const forced = opS + c >= T; // si no quiere, pierde la partida igual
       if (L < 3 && (p >= 0.82 || (forced && p >= 0.5))) return { type: 'raise_truco', why: `Sube a ${TNAME(L + 1)}` };
       const need = [0, 0.40, 0.48, 0.55][L];
-      // De vez en cuando quiere liviano, para que no lo corran siempre.
-      const ok = forced || p >= need || (L === 1 && p >= need - 0.12 && ctx.mem.h.rA < ctx.prof.bA * 2);
+      const ok = forced || p >= need;
       return { type: 'respond_truco', accept: ok, why: ok ? 'Quiere: le dan las cuentas' : 'No quiere' };
     }
     if (pc.type === 'envido') {
@@ -857,14 +849,10 @@ function cita(ctx) {
     if (pw >= 0.9 && faltaEnvidoPoints(T, st.scores) <= 8) return { type: 'envido', call: 'falta envido', why: 'Canta falta envido' };
     if (pw >= 0.78) return { type: 'envido', call: 'real envido', why: 'Canta real envido' };
     if (pw >= 0.58) return { type: 'envido', call: 'envido', why: 'Canta envido' };
-    // Mentira simple: a veces canta envido sin tanto.
-    if (pw < 0.40 && ctx.mem.h.rE < ctx.prof.bE) { ctx.mem.h.rE = 2; return { type: 'envido', call: 'envido', why: 'Canta envido' }; }
   }
   if (canTeamRaiseNow(st.bet, team) && st.bet.level < 3) {
     const p = trucoModel(ctx).p;
     if (p >= [0.66, 0.76, 0.86][st.bet.level]) return { type: 'truco', why: `Canta ${TNAME(st.bet.level + 1)}` };
-    // ...y a veces truco sin cartas (solo el truco inicial).
-    if (st.bet.level === 0 && p < 0.40 && ctx.mem.h.rT < ctx.prof.bT) { ctx.mem.h.rT = 2; return { type: 'truco', why: 'Canta truco' }; }
   }
   return citaPlay(ctx);
 }
@@ -893,58 +881,15 @@ function faltaOk(ctx) {
   return faltaEnvidoPoints(st.target, st.scores) <= 5 || opS >= st.target - 3 || myS <= opS - 7;
 }
 
-// ── Mentiras: cuándo conviene y cuánto ───────────────────────
-// Cada mano se sortea una sola vez (mem.h.rT / rE) si "hoy se miente"; así
-// la mentira sale de una estrategia mixta y no de cantar siempre.
-
-function oppShowedStrength(ctx) {
-  const { st, opp } = ctx, pc = st.pendingChant, env = st.chant.envido;
-  if (pc && pc.type === 'truco' && pc.callerSeat === opp) return true;
-  if (st.bet.level > 0 && st.bet.lastRaiserTeam === 1 - ctx.team) return true;
-  for (let i = 0; i < env.calls.length; i++) if ((i % 2 === 0 ? env.callerSeat : 1 - env.callerSeat) === opp) return true;
-  return false;
-}
-function oppShowedWeakness(ctx) {
-  const env = ctx.st.chant.envido;
-  return oppPassedEnvido(ctx) || (env.resolved && !env.accepted && env.calls.length > 0 && env.callerTeam === ctx.team);
-}
-// Multiplicador de la frecuencia de mentira. El Gaucho miente parejo (1);
-// el Duende elige el momento: rival que se achica seguido o que mostró
-// flojera, mano con alguna salida, tanteador; nunca tras una muestra de fuerza.
-function bluffTiming(ctx, kind, p, L) {
-  if (!ctx.prof.smart) return 1;
-  const { st, team, mem } = ctx;
-  const T = st.target, myS = st.scores[team], opS = st.scores[1 - team];
-  let m = 1;
-  if (oppShowedStrength(ctx)) m *= 0.15;
-  if (oppShowedWeakness(ctx)) m *= 1.6;
-  m *= kind === 't' ? clamp(foldTruco(mem, L) / TF_PRIOR[L], 0.5, 1.8) : clamp(foldEnvido(mem, 'envido', 2) / 0.42, 0.5, 1.8);
-  if (kind === 't') { if (p >= 0.2) m *= 1.3; else if (p < 0.1) m *= 0.5; }
-  if (opS >= T - 1) m *= 0.2;
-  if (myS >= T - 2) m *= 0.5;
-  if (myS <= opS - 5) m *= 1.3;
-  return m;
-}
-
-// Envido por iniciativa: devuelve el canto o null.
 function evEnvidoOpen(ctx, first) {
-  const { prof, mem } = ctx;
-  const E = envModel(ctx), pw = E.pWin, h = mem.h;
-  if (pw >= prof.vE) {
-    const cands = ['envido'];
-    if (pw >= 0.74) cands.push('real envido');
-    if (pw >= 0.86 && faltaOk(ctx)) cands.push('falta envido');
-    if (!prof.deep) return cands[cands.length - 1];
-    let best = null, bev = -Infinity;
-    for (const c of cands) { const e = E.call([c]); if (e > bev) { bev = e; best = c; } }
-    return best;
+  const E = envModel(ctx);
+  const opts = [{ call: null, ev: E.none(first) + ctx.prof.margin * ctx.sc }];
+  const fOk = faltaOk(ctx);
+  for (const c of ['envido', 'real envido', 'falta envido']) {
+    if (c === 'falta envido' && !fOk) continue;
+    opts.push({ call: c, ev: E.call([c]) });
   }
-  const base = pw < 0.40 ? prof.bE : prof.bE * 0.4;
-  if (h.rE < base * bluffTiming(ctx, 'e', pw, 1)) {
-    h.rE = 2;
-    return prof.smart && ctx.rng() < 0.25 ? 'real envido' : 'envido';
-  }
-  return null;
+  return opts;
 }
 
 // Valor de cantar (o subir) hasta el nivel L.
@@ -959,23 +904,18 @@ function evTrucoInit(ctx) {
   const { st, o, mem, prof } = ctx;
   const L0 = st.bet.level;
   const T = trucoModel(ctx);
-  const p = T.p, h = mem.h;
+  const c = TRUCO_LEVELS[L0].pts, n = TRUCO_LEVELS[L0 + 1].pts;
+  const pass = T.show(c), call = trucoCallEV(ctx, T, L0 + 1);
   const last = o.hand.length <= 1;
-  if (p >= prof.vT[L0]) {
-    // Canto por valor, si las cuentas no lo desaconsejan.
-    if (trucoCallEV(ctx, T, L0 + 1) < T.show(TRUCO_LEVELS[L0].pts)) return null;
-    // Trampa del Duende: con mano muy fuerte a veces espera a que cante el
-    // otro (más seguido si el rival es de cantar mucho) para subirle.
-    if (prof.trap && !last && p >= 0.85 && h.rTrap < (oppTrucoFreq(mem) > 0.45 ? 0.6 : 0.3)) return null;
-    return { type: 'truco', why: `Canta ${TNAME(L0 + 1)}` };
+  const gain = (call - pass) / ctx.sc - (last ? 0 : prof.margin);
+  let go = gain > 0;
+  if (prof.mix) {
+    let pr = 1 / (1 + Math.exp(-gain / prof.temp));
+    if (T.p > 0.9 && !last && st.trickIdx === 0) pr *= 0.6; // a veces se hace el distraído
+    go = ctx.rng() < pr;
   }
-  let base = p < 0.40 ? prof.bT : prof.bT * 0.5;
-  if (L0 >= 1) base *= 0.5;
-  if (h.rT < base * bluffTiming(ctx, 't', p, L0 + 1)) {
-    h.rT = 2;
-    return { type: 'truco', why: `Canta ${TNAME(L0 + 1)}` };
-  }
-  return null;
+  if (!go) return null;
+  return { type: 'truco', why: `Canta ${TNAME(L0 + 1)}` };
 }
 
 function evFlorStage(ctx, stage, data) {
@@ -1028,8 +968,8 @@ function ev(ctx) {
     if (pc.type === 'truco') {
       const L = pc.data.level;
       if (canEnvidoFirst(st)) {
-        const call = evEnvidoOpen(ctx, true);
-        if (call) return { type: 'envido_first', call, why: 'El envido está primero' };
+        const best = softPick(evEnvidoOpen(ctx, true), temp, rng);
+        if (best.call) return { type: 'envido_first', call: best.call, why: 'El envido está primero' };
       }
       const T = trucoModel(ctx);
       const c = TRUCO_LEVELS[L - 1].pts, n = TRUCO_LEVELS[L].pts;
@@ -1037,14 +977,7 @@ function ev(ctx) {
         { a: 'reject', ev: U(0, c) },
         { a: 'accept', ev: T.show(n) },
       ];
-      // Subir: por valor con mano buena; de mentira, de vez en cuando.
-      if (L < 3) {
-        if (T.p >= prof.vR) opts.push({ a: 'raise', ev: trucoCallEV(ctx, T, L + 1) - prof.margin * ctx.sc });
-        else if (T.p < 0.40 && mem.h.rT < prof.bT * 0.35 * bluffTiming(ctx, 't', T.p, L + 1) * (prof.smart ? 2 : 1)) {
-          mem.h.rT = 2;
-          return { type: 'raise_truco', why: `Sube a ${TNAME(L + 1)}` };
-        }
-      }
+      if (L < 3) opts.push({ a: 'raise', ev: trucoCallEV(ctx, T, L + 1) - prof.margin * ctx.sc });
       const best = softPick(opts, temp, rng);
       if (best.a === 'raise') return { type: 'raise_truco', why: `Sube a ${TNAME(L + 1)}` };
       return { type: 'respond_truco', accept: best.a === 'accept', why: best.a === 'accept' ? 'Quiere' : 'No quiere' };
@@ -1055,16 +988,9 @@ function ev(ctx) {
       const tot = envidoTotalIfAccepted(calls, 0, st.target, st.scores), rej = envidoPointsIfRejected(calls, 0, st.target, st.scores);
       const opts = [{ a: 'reject', ev: U(0, rej) }, { a: 'accept', ev: E.accept(tot) }];
       const fOk = faltaOk(ctx);
-      const ups = envidoCanRaise(calls);
-      if (E.pWin >= 0.6) {
-        for (const y of ups) {
-          if (y === 'falta envido' && (!fOk || E.pWin < 0.8)) continue;
-          opts.push({ a: y, ev: E.call(calls.concat([y])) - prof.margin * ctx.sc });
-        }
-      } else if (E.pWin < 0.40 && ups.length && ups[0] !== 'falta envido'
-        && mem.h.rE < prof.bE * 0.35 * bluffTiming(ctx, 'e', E.pWin, 1) * (prof.smart ? 2 : 1)) {
-        mem.h.rE = 2;
-        return { type: 'respond_envido', action: ups[0], why: `Sube: ${ups[0]}` };
+      for (const y of envidoCanRaise(calls)) {
+        if (y === 'falta envido' && !fOk) continue;
+        opts.push({ a: y, ev: E.call(calls.concat([y])) - prof.margin * ctx.sc });
       }
       if (canFlorOverEnvido(st)) opts.push({ a: 'flor', ev: florValue(ctx, pF) });
       const best = softPick(opts, temp, rng);
@@ -1076,14 +1002,15 @@ function ev(ctx) {
   }
 
   const canEnv = canOpenEnvido(st, seat);
+  let envOpts = null;
   if (canSingFlor(st, seat)) {
     let alt = ctx.U0;
-    if (canEnv) { const E = envModel(ctx); alt = Math.max(E.none(false), E.call(['envido'])); }
+    if (canEnv) { envOpts = evEnvidoOpen(ctx, false); for (const o of envOpts) if (o.ev > alt) alt = o.ev; }
     if (florValue(ctx, pF) > alt + 0.05 * ctx.sc) return { type: 'flor', why: 'Canta flor' };
   }
   if (canEnv) {
-    const call = evEnvidoOpen(ctx, false);
-    if (call) return { type: 'envido', call, why: `Canta ${call}` };
+    const best = softPick(envOpts || evEnvidoOpen(ctx, false), temp, rng);
+    if (best.call) return { type: 'envido', call: best.call, why: `Canta ${best.call}` };
   }
   if (canTeamRaiseNow(st.bet, team) && st.bet.level < 3) {
     const a = evTrucoInit(ctx);
@@ -1173,13 +1100,6 @@ export function aiApplyAction(a) {
     case 'respond_flor': respondFlor(a.action); break;
     default: break;
   }
-}
-
-// Estimación neutral (sin leer al rival) de ganar el truco y el envido desde
-// un asiento. La usa el simulador para medir cuántos cantos son mentira.
-export function aiEstimate(st, seat, rng = Math.random) {
-  const ctx = makeCtx(st, seat, 'probe', aiNewMemory(), rng);
-  return { pT: trucoModel(ctx).p, pE: envModel(ctx).pWin };
 }
 
 export function aiLevelOf(mode) {
