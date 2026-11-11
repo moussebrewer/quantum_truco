@@ -22,6 +22,7 @@ import {
   closeModal,
   log,
   toggleLog,
+  clearLog,
   toggleChat,
   showSay,
 } from './ui';
@@ -152,7 +153,7 @@ const APP_HTML = `<!-- ═══════════════════
     </div>
     <div class="header-actions">
       <div class="online-header-status" id="online-header-status"></div>
-      <button class="quantum-btn-small" id="btn-online-leave" onclick="leaveOnlineRoom()" style="display:none">Salir</button>
+      <button class="quantum-btn-small" id="btn-exit" onclick="exitToMenu()" title="Salir al menú principal">Salir</button>
       <button class="quantum-btn-small chat-toggle" id="btn-chat-toggle" onclick="toggleChat()">Chat<span class="chat-badge" id="chat-badge" style="display:none">0</span></button>
       <button class="quantum-btn-small" id="btn-log-toggle" onclick="toggleLog()">Log</button>
     </div>
@@ -164,7 +165,10 @@ const APP_HTML = `<!-- ═══════════════════
     <div class="log-sidebar" id="log-sidebar">
       <div class="log-sidebar-header">
         <span class="log-sidebar-title">⊗ Log</span>
-        <button class="log-close-btn" onclick="toggleLog()" title="Cerrar log">✕</button>
+        <span class="log-header-actions">
+          <button class="log-clear-btn" onclick="clearLog()" title="Borrar el log">Limpiar</button>
+          <button class="log-close-btn" onclick="toggleLog()" title="Cerrar log">✕</button>
+        </span>
       </div>
       <div class="log-entries" id="log-panel"></div>
     </div>
@@ -351,7 +355,33 @@ window.startGame = () => {
   }
   // Si quedó guardada una sala online vieja, se abandona antes de jugar offline.
   if (hasOnlineSession()) leaveOnlineRoom();
+  clearLog(); // cada partida arranca con el log vacío
   startLocalGame();
+};
+window.clearLog = clearLog;
+
+// Botón "Salir" de la partida: pregunta antes y vuelve al menú principal.
+// Offline la partida se cancela; online se abandona la sala.
+window.exitToMenu = () => {
+  const online = hasOnlineSession();
+  showModal('danger', '¿Salir al menú?',
+    online
+      ? 'Vas a abandonar la sala. Tu lugar queda libre y los demás se quedan esperando.'
+      : 'La partida en curso se cancela y no se puede retomar.',
+    null,
+    [
+      { label: 'Sí, salir', cls: 'danger', cb: () => {
+          closeModal();
+          // Cerrar lo que pudiera estar abierto encima de la mesa.
+          setEnvidoOverlayOnClose(null);
+          document.getElementById('envido-overlay')?.classList.remove('open');
+          hidePassOverlay();
+          document.querySelectorAll('.new-hand-overlay, .fly-ghost').forEach(el => el.remove());
+          if (online) leaveOnlineRoom();
+          restartLocalGame();
+      }},
+      { label: 'Seguir jugando', cls: 'primary', cb: () => closeModal() },
+    ]);
 };
 // Salida de la pantalla de final: siempre vuelve al menú, y si la partida
 // era online abandona la sala (para que no se reabra sola al recargar).

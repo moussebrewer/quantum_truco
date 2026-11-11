@@ -82,6 +82,10 @@ export function showWinScreen(title, subtitle, score) {
   if (titleEl) titleEl.textContent = title;
   if (subEl) subEl.textContent = subtitle;
   if (scoreEl) scoreEl.textContent = score;
+  // Los carteles de canto que quedaban en cola ya no tienen sentido y
+  // taparían el puntaje final.
+  toastQueue.length = 0;
+  document.getElementById('truco-toast')?.classList.remove('show');
   // Online, "otra partida" es pedirle revancha a la sala; el estado de la
   // sala (rival desconectado, revancha pedida) se muestra debajo.
   const online = !!G?.onlineMode;
@@ -1111,6 +1115,11 @@ export function closeModal() {
 }
 
 // ── log ──────────────────────────────────────────────────────
+
+export function clearLog() {
+  const panel = document.getElementById('log-panel');
+  if (panel) panel.innerHTML = '';
+}
 
 export function log(msg, cls = '') {
   const panel = document.getElementById('log-panel'); // now the .log-entries div

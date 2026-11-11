@@ -536,6 +536,7 @@ export function toggleFlor() {
 
 export function startGame() {
   if (setupCfg.mode === 'online_1v1') return;
+  gameEpoch++;
   G = createBaseState(setupCfg);
   G.aiMode = setupCfg.mode;
   G.aiSeat = (setupCfg.mode !== 'human') ? 1 : null;
@@ -545,7 +546,22 @@ export function startGame() {
   animateDeal(() => passTo(G.activeSeat));
 }
 
-export function restartGame() { G = null; if (runtime.resetAIState) runtime.resetAIState(); if (runtime.showScreen) runtime.showScreen("screen-setup"); }
+// Termina la partida en curso y vuelve al menú.
+export function restartGame() {
+  gameEpoch++;
+  G = null;
+  if (runtime.resetAIState) runtime.resetAIState();
+  if (runtime.showScreen) runtime.showScreen("screen-setup");
+}
+
+// Cada partida tiene su "época". Los temporizadores del motor (colapso,
+// barrido, reparto) se agendan con later(): si mientras tanto la partida se
+// abandonó o empezó otra, no hacen nada en vez de tocar la partida nueva.
+let gameEpoch = 0;
+function later(fn, ms) {
+  const epoch = gameEpoch;
+  return setTimeout(() => { if (epoch === gameEpoch && G) fn(); }, ms);
+}
 
 
 export function allSeats() { return Array.from({length: G.tableSize}, (_, i) => i); }
@@ -1168,7 +1184,7 @@ function resolveTrick() {
   G.phase = 'collapsing';
   if (runtime.renderGame) runtime.renderGame();
 
-  setTimeout(() => {
+  later(() => {
     collapseThisTrick();
     animateCollapse(() => {
       const collapsedMap = {};
@@ -1205,7 +1221,7 @@ function resolveTrick() {
       G.phase = handOver ? 'hand_end' : 'baza_end';
       if (runtime.renderGame) runtime.renderGame();
       if (!handOver) {
-        setTimeout(() => {
+        later(() => {
           if (G.phase === 'baza_end') animateSweepTrick(() => nextTrick());
         }, 2600);
       }
@@ -1232,7 +1248,7 @@ export function animateSweepTrick(onDone) {
     );
   });
 
-  setTimeout(onDone, 330 + slots.length * 50);
+  later(onDone, 330 + slots.length * 50);
 }
 
 // Colapso de las cartas de la mesa (y de sus pares en la mano). El render
@@ -1245,7 +1261,7 @@ function animateCollapse(cb) {
   uiRenderArena();
   uiRenderHand();
   const n = Object.keys(G.playsThisTrick).length;
-  setTimeout(cb, Math.max(0, n - 1) * COLLAPSE_STAGGER + COLLAPSE_DUR + 250);
+  later(cb, Math.max(0, n - 1) * COLLAPSE_STAGGER + COLLAPSE_DUR + 250);
 }
 
 function nextTrick() {
@@ -1546,7 +1562,7 @@ export function animateDeal(onDone) {
   }
 
   const LABEL_DURATION = prefersReducedMotion() ? 700 : 1500;
-  setTimeout(() => {
+  later(() => {
     overlay.remove();
     dealCardsAnimated(onDone);
   }, LABEL_DURATION);
@@ -1597,7 +1613,7 @@ function dealCardsAnimated(onDone) {
     }, k * STEP);
   });
 
-  setTimeout(onDone, (order.length - 1) * STEP + FLY + 380);
+  later(onDone, (order.length - 1) * STEP + FLY + 380);
 }
 
 function showWin(winnerTeam) {

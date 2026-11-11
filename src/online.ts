@@ -17,6 +17,7 @@ import {
   showTrucoCallToast,
   showSay,
   log,
+  clearLog,
   setChatEnabled,
   clearChat,
   appendChatMessage,
@@ -157,7 +158,11 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 let lastSayN = 0; // último "dicho" (canto o respuesta) ya mostrado
 let lastLogN = 0; // última línea de log ya agregada
 
+let presentGen = 0;
+
 function resetPresentation() {
+  presentGen++;
+  presenting = false;
   stateQueue.length = 0;
   lastSeq = null;
   lastSayN = 0;
@@ -195,19 +200,23 @@ function installStateEnvelope(envelope) {
 }
 
 async function drainStateQueue() {
+  // Si la sala se abandona a mitad de una presentación, esta corrida queda
+  // vieja (cambia presentGen) y no debe seguir ni bloquear a la siguiente.
+  const gen = presentGen;
   presenting = true;
   try {
-    while (stateQueue.length) {
+    while (stateQueue.length && gen === presentGen) {
       const envelope = stateQueue.shift();
       try {
         await presentEnvelope(envelope);
       } catch (err) {
+        if (gen !== presentGen) return;
         console.error(err);
         applyEnvelope(envelope);
       }
     }
   } finally {
-    presenting = false;
+    if (gen === presentGen) presenting = false;
   }
 }
 
@@ -217,6 +226,12 @@ async function presentEnvelope(envelope) {
   const seq = next.eventSeq || 0;
   const isNewGame = lastSeq === null || !prev || seq < lastSeq;
 
+  // Partida nueva (o reconexión): el log arranca limpio y se vuelve a
+  // llenar con lo que el servidor guarda de la partida en curso.
+  if (isNewGame) {
+    clearLog();
+    lastLogN = 0;
+  }
   flushSaysAndLog(next, isNewGame);
 
   if (isNewGame) {
@@ -311,6 +326,7 @@ async function presentHandEnd(hand) {
 function applyEnvelope(envelope) {
   const state = envelope.state;
   if (!state) return;
+  if (!session.roomId) return; // ya se salió de la sala
   state.onlineMode = true;
   state.viewerSeat = session.seat;
   state.roomCode = session.roomCode;

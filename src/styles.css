@@ -1127,3 +1127,15 @@ body {
 @media (max-width: 720px) {
   .six-players .mazo-stack { top: 8px; right: 8px; transform: none; --card-w: 30px; }
 }
+
+/* ── LOG: botón de limpiar ───────────────── */
+.log-header-actions { display: flex; align-items: center; gap: 8px; }
+.log-clear-btn {
+  background: none; border: 1px solid rgba(0,160,255,0.2); color: var(--muted);
+  font-family: 'Cinzel', serif; font-size: 0.56rem; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 2px 7px; border-radius: 3px; cursor: pointer; transition: all 0.15s;
+}
+.log-clear-btn:hover { border-color: var(--accent-a); color: var(--accent-a); }
+/* Con seis cartas por baza, el historial las acomoda en dos filas. */
+.six-players .history-cards-row { flex-wrap: wrap; }
+.six-players .history-card { --card-w: 36px; }
