@@ -29,6 +29,12 @@ import {
   startNewHand,
   getVisibleCard,
   deferPendingTrucoAndInitiateEnvido,
+  canEnvidoFirst,
+  canOpenEnvido,
+  canSingFlor,
+  canFlorOverEnvido,
+  florOverEnvido,
+  faltaEnvidoPoints,
 } from './game';
 
 import {
@@ -42,6 +48,8 @@ import {
   sendSingFlor,
   sendRespondFlor,
   sendGoToMazo,
+  sendEnvidoFirst,
+  sendFlorOverEnvido,
 } from './online';
 
 import { flying, arenaKey, COLLAPSE_DUR, COLLAPSE_STAGGER } from './anim';
@@ -604,6 +612,14 @@ function dispatchRespondEnvido(action) {
   return G?.onlineMode ? sendRespondEnvido(action) : respondEnvido(action);
 }
 
+function dispatchEnvidoFirst(call) {
+  return G?.onlineMode ? sendEnvidoFirst(call) : deferPendingTrucoAndInitiateEnvido(call);
+}
+
+function dispatchFlorOverEnvido() {
+  return G?.onlineMode ? sendFlorOverEnvido() : florOverEnvido();
+}
+
 function dispatchSingFlor() {
   return G?.onlineMode ? sendSingFlor() : singFlor();
 }
@@ -634,6 +650,7 @@ export function renderGame() {
   renderHand();
   renderHistoryPanel();
   renderActionPanel();
+  renderTurnBanner();
 }
 
 function updateHeader() {
@@ -1021,17 +1038,16 @@ function renderActionPanel() {
   turnLbl.textContent = p.name;
 
   if (G.phase === 'chant') {
-    const manoOrder = circularOrder(allSeats(), G.manoSeat, G.tableSize);
-    const envidoOk  = G.tableSize === 2 ? true : manoOrder.indexOf(seat) >= G.tableSize - 2;
-    const envCalls  = chant.envido.calls;
-    const canOpenEnvido = !chant.envido.resolved && !chant.florBlockedEnvido && envidoOk && envCalls.length === 0;
-    if (canOpenEnvido) {
+    if (canOpenEnvido(G, seat)) {
       addBtn(btns, 'Envido',        'success', () => dispatchInitiateEnvido('envido'));
       addBtn(btns, 'Real Envido',   'success', () => dispatchInitiateEnvido('real envido'));
       addBtn(btns, 'Falta Envido',  'success', () => dispatchInitiateEnvido('falta envido'));
     }
-    if (G.conFlor && !chant.flor.resolved && !chant.florBlockedEnvido)
-      addBtn(btns, '🌸 Flor', 'flor', dispatchSingFlor);
+    // La flor solo se ofrece si alguna combinación de colapsos te la da.
+    if (canSingFlor(G, seat)) {
+      const pct = Math.round((p.florMetric?.pFlor ?? 0) * 100);
+      addBtn(btns, `🌸 Flor (${pct}% de tenerla)`, 'flor', dispatchSingFlor);
+    }
     if (canTeamRaiseNow(bet, actTeam)) {
       const nxt = TRUCO_LEVELS[bet.level + 1];
       if (nxt) addBtn(btns, `${nxt.name} (${nxt.pts}p)`, 'gold', dispatchSingTruco);
@@ -1048,10 +1064,7 @@ function renderActionPanel() {
   } else if (G.phase === 'baza_end') {
     const last = G.trickWinners[G.trickWinners.length - 1];
     turnLbl.textContent = last === -1 ? '⚔ Parda' : `${teamLabel(last)} gana`;
-    if (!G.onlineMode && canTeamRaiseNow(bet, actTeam)) {
-      const nxt = TRUCO_LEVELS[bet.level + 1];
-      if (nxt) addBtn(btns, `${nxt.name} (${nxt.pts}p)`, 'gold', dispatchSingTruco);
-    }
+    // Entre baza y baza no se canta: el truco se canta en tu turno.
 
   } else if (G.phase === 'hand_end') {
     turnLbl.textContent = `+${G.handScore[0]} / +${G.handScore[1]}`;
@@ -1087,17 +1100,18 @@ function renderPendingChant(turnLbl, btns) {
       if (higher) addBtn(btns, `↑ ${higher.name} (${higher.pts}p)`, 'gold', dispatchRaiseTruco);
     }
 
-    const envOk = G.trickIdx === 0 && !env.resolved && !G.chant.florBlockedEnvido && env.calls.length === 0 && !G.onlineMode;
-    if (envOk) {
+    // "El envido está primero": también vale online.
+    if (canEnvidoFirst()) {
       addSep(btns);
-      addBtn(btns, '♠ Envido primero', 'success', () => deferPendingTrucoAndInitiateEnvido('envido'));
-      addBtn(btns, '♠ Real Envido primero', 'success', () => deferPendingTrucoAndInitiateEnvido('real envido'));
+      addBtn(btns, 'Envido primero', 'success', () => dispatchEnvidoFirst('envido'));
+      addBtn(btns, 'Real Envido primero', 'success', () => dispatchEnvidoFirst('real envido'));
+      addBtn(btns, 'Falta Envido primero', 'success', () => dispatchEnvidoFirst('falta envido'));
     }
 
   } else if (pc.type === 'envido') {
     const curPts = envidoTotalIfAccepted(env.calls, env.callerTeam, G.target, G.scores);
     const rejPts = envidoPointsIfRejected(env.calls, env.callerTeam, G.target, G.scores);
-    const raises = envidoCanRaise(env.calls[env.calls.length - 1]);
+    const raises = envidoCanRaise(env.calls);
     const callStr = env.calls.map(c => c.toUpperCase()).join(' + ');
 
     turnLbl.textContent = p.name;
@@ -1112,27 +1126,39 @@ function renderPendingChant(turnLbl, btns) {
     for (const r of raises) {
       addBtn(btns, `↑ ${r}`, 'gold', () => dispatchRespondEnvido(r));
     }
+    // Contestar con flor anula el envido.
+    if (canFlorOverEnvido()) {
+      const pct = Math.round((G.players[pc.responderSeat].florMetric?.pFlor ?? 0) * 100);
+      addSep(btns);
+      addBtn(btns, `🌸 Flor (${pct}%): anula el envido`, 'flor', dispatchFlorOverEnvido);
+    }
 
   } else if (pc.type === 'flor') {
     const { stage } = pc.data;
     turnLbl.textContent = p.name;
 
     if (stage === 'initial') {
-      addChantState(btns, `${caller.name} canta`, 'FLOR', `¿También tenés flor?`);
-      addBtn(btns, '🌸 Sí, tengo Flor', 'success', () => dispatchRespondFlor('yes'));
-      addBtn(btns, `✗ No (${teamLabel(teamOf(pc.callerSeat))} cobra 3p)`, 'danger', () => dispatchRespondFlor('no'));
+      const myPct = Math.round((G.players[pc.responderSeat].florMetric?.pFlor ?? 0) * 100);
+      addChantState(btns, `${caller.name} canta`, 'FLOR',
+        'Se cobra al final: 3 si le sale. Si no le sale, los 3 son para vos.');
+      if (myPct > 0) addBtn(btns, `🌸 Yo también (${myPct}% de tenerla)`, 'success', () => dispatchRespondFlor('yes'));
+      addBtn(btns, 'Seguir sin flor', 'primary', () => dispatchRespondFlor('no'));
 
     } else if (stage === 'contraflor') {
-      addChantState(btns, 'Ambos tienen Flor', '¿CONTRAFLOR?', ``);
-      addBtn(btns, 'Flor simple', 'primary', () => dispatchRespondFlor('simple'));
-      addBtn(btns, 'Contraflor (+dif)', 'gold', () => dispatchRespondFlor('contraflor'));
-      addBtn(btns, 'Contraflor al Resto', 'danger', () => dispatchRespondFlor('alresto'));
+      addChantState(btns, 'Los dos cantaron flor', '¿CONTRAFLOR?', 'Gana la flor más alta que salga al colapsar.');
+      addBtn(btns, 'Dejarla en flor (3p)', 'primary', () => dispatchRespondFlor('simple'));
+      addBtn(btns, 'Contraflor (6p)', 'gold', () => dispatchRespondFlor('contraflor'));
+      addBtn(btns, `Contraflor al resto (${faltaEnvidoPoints(G.target, G.scores)}p)`, 'danger', () => dispatchRespondFlor('alresto'));
 
     } else if (stage === 'resp_contraflor') {
-      const lbl = pc.data.alResto ? 'CONTRAFLOR AL RESTO' : 'CONTRAFLOR';
-      addChantState(btns, `${caller.name} canta`, lbl, ``);
-      addBtn(btns, '✓ Quiero', 'success', () => dispatchRespondFlor('accept'));
-      addBtn(btns, '✗ No Quiero', 'danger', () => dispatchRespondFlor('reject'));
+      const alResto = pc.data.alResto;
+      const lbl = alResto ? 'CONTRAFLOR AL RESTO' : 'CONTRAFLOR';
+      const win = alResto ? faltaEnvidoPoints(G.target, G.scores) : 6;
+      const rej = alResto ? 6 : 4;
+      addChantState(btns, `${caller.name} canta`, lbl,
+        `Querer: ${win} pts | Rechazar: ${teamLabel(teamOf(pc.callerSeat))} cobra ${rej} pts`);
+      addBtn(btns, `✓ Quiero (${win}p)`, 'success', () => dispatchRespondFlor('accept'));
+      addBtn(btns, `✗ No Quiero (+${rej}p)`, 'danger', () => dispatchRespondFlor('reject'));
     }
   }
 }
@@ -1166,22 +1192,176 @@ function addBtn(container, label, cls, cb) {
 
 // ── Truco ────────────────────────────────────────────────────
 
-export function showTrucoCallToast(phrase) {
+// Carteles en el centro de la pantalla. Van en cola para que dos cantos
+// seguidos (p. ej. "¡Truco!" y "¡Quiero!") no se pisen.
+const toastQueue = [];
+let toastBusy = false;
+
+function pumpToasts() {
   const el = document.getElementById('truco-toast');
-  if (!el) return;
-  el.textContent = phrase;
+  if (!el || toastBusy) return;
+  const item = toastQueue.shift();
+  if (!item) return;
+  toastBusy = true;
+  el.innerHTML = '';
+  el.className = 'truco-toast';
+  if (item.name) {
+    const who = document.createElement('div');
+    who.className = `say-name t${item.team}`;
+    who.textContent = item.name;
+    el.appendChild(who);
+    el.classList.add(`say-t${item.team}`);
+  }
+  const what = document.createElement('div');
+  what.className = 'say-text';
+  what.textContent = item.text;
+  el.appendChild(what);
   el.classList.add('show');
-  setTimeout(() => { if (el.textContent === phrase) el.classList.remove('show'); }, 2800);
+  // Si hay más carteles esperando, este dura menos.
+  const hold = toastQueue.length ? 1300 : (item.hold || 2000);
+  setTimeout(() => {
+    el.classList.remove('show');
+    setTimeout(() => { toastBusy = false; pumpToasts(); }, 220);
+  }, hold);
 }
 
-const TRUCO_ACCEPT_PHRASES = ["¡Sí, canejo!", "¡Por supuesto, carajo!", "¡Quiero, che!", "¡Dale, vamos!", "¡Qué le voy a hacer, quiero!", "¡Venga ese truco!", "¡Jugado está, la puta madre!", "¡Acepto, so bruto!", "¡Quiero, y no me tiembla el pulso!", "¡Tá bien, quiero!", "¡Quiero, que no se diga!", "¡Y dale, quiero carajo!"];
-export function showTrucoToast(accepterName) {
-  const el = document.getElementById('truco-toast');
+// Cartel neutro (sin autor), p. ej. el resumen de la mano.
+export function showTrucoCallToast(phrase, hold) {
+  toastQueue.push({ text: phrase, hold });
+  pumpToasts();
+}
+
+// Algo que dice un jugador: canto, respuesta o mensaje de chat.
+export function showSay(name, text, team = 0) {
+  toastQueue.push({ name, text, team });
+  pumpToasts();
+}
+
+// (Las frases de "quiero" ahora las elige el motor y llegan por showSay.)
+export function showTrucoToast() {}
+
+// ── Cartel de turno ──────────────────────────────────────────
+// Una línea bien visible sobre la mano que dice qué se espera ahora.
+function renderTurnBanner() {
+  const el = document.getElementById('turn-banner');
   if (!el) return;
-  const phrase = TRUCO_ACCEPT_PHRASES[Math.floor(Math.random() * TRUCO_ACCEPT_PHRASES.length)];
-  el.textContent = phrase;
-  el.classList.add('show');
-  setTimeout(() => el.classList.remove('show'), 3000);
+  const viewer = getViewerSeatForRender();
+  const hotSeat = !G.onlineMode && G.aiSeat === null;
+  let text = '';
+  let mine = false;
+
+  if (G.onlineMode && G.opponentConnected === false) {
+    text = 'Rival desconectado. Esperando que vuelva…';
+  } else if (G.phase === 'collapsing') {
+    text = '⊗ Colapsando…';
+  } else if (G.phase === 'baza_end' || G.phase === 'hand_end') {
+    text = '';
+  } else if (G.pendingChant) {
+    const pc = G.pendingChant;
+    const what = pc.type === 'truco' ? (TRUCO_LEVELS[pc.data?.level]?.name || 'Truco')
+      : pc.type === 'envido' ? (G.chant.envido.calls.slice(-1)[0] || 'envido')
+      : 'flor';
+    if (pc.responderSeat === viewer) {
+      mine = true;
+      text = hotSeat
+        ? `${G.players[viewer].name}: te cantaron ${what}. Respondé.`
+        : `Te cantaron ${what}. Respondé.`;
+    } else {
+      text = `Esperando la respuesta de ${G.players[pc.responderSeat].name}…`;
+    }
+  } else if (G.aiSeat !== null && G.aiThinking) {
+    text = `${G.players[G.aiSeat].name} está pensando…`;
+  } else if (G.activeSeat === viewer && (G.phase === 'play' || G.phase === 'chant')) {
+    mine = true;
+    const canChant = G.phase === 'chant';
+    const who = hotSeat ? `${G.players[viewer].name}, es tu turno` : 'Es tu turno';
+    text = canChant ? `${who}: cantá o jugá una carta` : `${who}: jugá una carta`;
+  } else if (G.players[G.activeSeat]) {
+    text = `Turno de ${G.players[G.activeSeat].name}…`;
+  }
+
+  el.textContent = text;
+  el.classList.toggle('mine', mine);
+  el.classList.toggle('empty', !text);
+}
+
+// ── Chat (solo online) ───────────────────────────────────────
+let chatUnread = 0;
+
+function chatIsOpen() {
+  const panel = document.getElementById('chat-panel');
+  if (!panel) return false;
+  // En escritorio el panel está siempre a la vista; en celular es un cajón.
+  return panel.classList.contains('open') || getComputedStyle(panel).position !== 'fixed';
+}
+
+function updateChatBadge() {
+  const badge = document.getElementById('chat-badge');
+  if (!badge) return;
+  badge.textContent = chatUnread > 9 ? '9+' : String(chatUnread);
+  badge.style.display = chatUnread > 0 ? '' : 'none';
+}
+
+export function setChatEnabled(on) {
+  document.getElementById('screen-game')?.classList.toggle('has-chat', !!on);
+  if (!on) clearChat();
+}
+
+export function clearChat() {
+  const list = document.getElementById('chat-list');
+  if (list) list.innerHTML = '';
+  chatUnread = 0;
+  updateChatBadge();
+}
+
+// mine: lo escribí yo. announce: mostrarlo además como cartel si el chat no está a la vista.
+export function appendChatMessage(name, text, team, mine, announce = true) {
+  const list = document.getElementById('chat-list');
+  if (!list) return;
+  const row = document.createElement('div');
+  row.className = 'chat-msg' + (mine ? ' mine' : '');
+  const who = document.createElement('span');
+  who.className = `chat-who t${team}`;
+  who.textContent = mine ? 'Vos' : name;
+  const what = document.createElement('span');
+  what.className = 'chat-text';
+  what.textContent = text;
+  row.append(who, what);
+  list.appendChild(row);
+  while (list.children.length > 80) list.firstChild.remove();
+  list.scrollTop = list.scrollHeight;
+
+  if (!mine && announce && !chatIsOpen()) {
+    chatUnread++;
+    updateChatBadge();
+    showSay(`💬 ${name}`, text, team);
+  }
+}
+
+export function toggleChat() {
+  const panel = document.getElementById('chat-panel');
+  if (!panel) return;
+  const open = panel.classList.toggle('open');
+  if (open) {
+    chatUnread = 0;
+    updateChatBadge();
+    const list = document.getElementById('chat-list');
+    if (list) list.scrollTop = list.scrollHeight;
+    document.getElementById('chat-input')?.focus();
+  }
+}
+
+export function initChat(onSend) {
+  const form = document.getElementById('chat-form');
+  const input = document.getElementById('chat-input');
+  if (!form || !input) return;
+  form.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+    onSend(text);
+    input.value = '';
+  });
 }
 
 // Returns which cards from a 3-card hand contribute to the envido score, and their individual values

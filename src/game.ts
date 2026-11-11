@@ -8,6 +8,7 @@ export const setupCfg = { tableSize:2, target:15, conFlor:false, mode:'human' };
 
 // Asiento de quien está mirando la pantalla (para orientar animaciones).
 function viewerSeatForAnim() {
+  if (G.onlineMode && Number.isInteger(G.viewerSeat)) return G.viewerSeat;
   return (G.aiSeat !== null && G.aiSeat !== undefined) ? 0 : G.activeSeat;
 }
 export let florOn = false;
@@ -294,31 +295,40 @@ function resolveHandTruco(trickWinners, manoTeam) {
   return manoTeam;
 }
 
+// Falta envido: lo que le falta al equipo que va ganando para llegar al
+// objetivo. Si se quiere, reemplaza a todo lo cantado antes (no se suma).
+export function faltaEnvidoPoints(target, scores) {
+  return Math.max(target - Math.max(scores[0], scores[1]), 1);
+}
+
 export function envidoTotalIfAccepted(calls, callerTeam, target, scores) {
+  if (calls.includes("falta envido")) return faltaEnvidoPoints(target, scores);
   let total = 0;
-  for (const call of calls) {
-    if (call==="falta envido") total += Math.max(target - scores[1-callerTeam], 1);
-    else total += ENVIDO_CALL_PTS[call];
-  }
+  for (const call of calls) total += ENVIDO_CALL_PTS[call] || 0;
   return total;
 }
 
+// No querido: vale lo que se había cantado antes del último canto (mínimo 1).
 export function envidoPointsIfRejected(calls, callerTeam, target, scores) {
   if (!calls.length) return 0;
   const prev = calls.slice(0,-1);
   if (!prev.length) return 1;
   let total = 0;
-  for (const call of prev) {
-    if (call==="falta envido") total += Math.max(target-scores[1-callerTeam],1);
-    else total += ENVIDO_CALL_PTS[call];
-  }
+  for (const call of prev) total += ENVIDO_CALL_PTS[call] || 0;
   return Math.max(total, 1);
 }
 
-export function envidoCanRaise(lastCall) {
-  if (lastCall==="falta envido") return [];
-  if (lastCall==="real envido") return ["falta envido"];
-  if (lastCall==="envido") return ["envido","real envido","falta envido"];
+// Qué se puede cantar encima. Acepta la lista completa de cantos (o solo el
+// último, por compatibilidad). "Envido" se puede cantar dos veces como mucho.
+export function envidoCanRaise(callsOrLast) {
+  const calls = Array.isArray(callsOrLast) ? callsOrLast : [callsOrLast];
+  const last = calls[calls.length - 1];
+  if (last==="falta envido") return [];
+  if (last==="real envido") return ["falta envido"];
+  if (last==="envido") {
+    const envidos = calls.filter(c => c === "envido").length;
+    return envidos < 2 ? ["envido","real envido","falta envido"] : ["real envido","falta envido"];
+  }
   return [];
 }
 
@@ -477,8 +487,11 @@ function newGame(cfg) {
     deck,
     players,
     scores: [0,0],
-    manoSeat: 0,
+    // El primer mano se sortea; después rota en cada mano.
+    manoSeat: Math.floor(Math.random() * tableSize),
     handNum: 1,
+    handChant: [0, 0],
+    handSettled: false,
     // current hand state
     bet: {level:0, lastRaiserTeam:null},
     chant: {
@@ -593,13 +606,102 @@ export function clearChantPending() {
   G.pendingChant = null;
 }
 
+// Lo que un jugador dice en voz alta (cantos y respuestas). Queda en el
+// estado (G.says) para que los clientes online también lo muestren.
+function announce(seat, text) {
+  G.sayN = (G.sayN || 0) + 1;
+  G.says = [...(G.says || []), { n: G.sayN, seat, text }].slice(-8);
+  if (!headlessMode && typeof document !== 'undefined' && runtime.showSay) {
+    runtime.showSay(G.players[seat].name, text, teamOf(seat));
+  }
+}
+
+function capitalize(s) {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+const ACCEPT_PHRASES = ["¡Sí, canejo!", "¡Por supuesto, carajo!", "¡Quiero, che!", "¡Dale, vamos!", "¡Qué le voy a hacer, quiero!", "¡Venga ese truco!", "¡Jugado está, la puta madre!", "¡Acepto, so bruto!", "¡Quiero, y no me tiembla el pulso!", "¡Tá bien, quiero!", "¡Quiero, que no se diga!", "¡Y dale, quiero carajo!"];
+
+// "El envido está primero": quien debe responder un truco en la primera
+// baza puede cantar envido antes; el truco queda pendiente hasta resolverlo.
+export function canEnvidoFirst(state = G) {
+  const pc = state?.pendingChant;
+  const env = state?.chant?.envido;
+  // Solo ante el truco inicial (no ante un retruco o vale cuatro).
+  return !!pc && pc.type === 'truco' && pc.data?.level === 1 && state.trickIdx === 0
+    && !!env && !env.resolved && env.calls.length === 0
+    && !state.chant.florBlockedEnvido;
+}
+
+// ¿Puede `seat` abrir el envido ahora? Solo en la primera baza, antes de
+// jugar su carta, sin truco querido de por medio y sin flor cantada.
+export function canOpenEnvido(state = G, seat = state?.activeSeat) {
+  if (!state || state.pendingChant) return false;
+  const env = state.chant.envido;
+  if (state.phase !== 'chant' || state.trickIdx !== 0) return false;
+  if (env.resolved || env.calls.length > 0 || state.chant.florBlockedEnvido) return false;
+  if (state.bet.level > 0) return false;
+  if (state.playsThisTrick?.[seat]) return false;
+  if (state.tableSize > 2) {
+    // De a cuatro canta el pie de cada equipo (los dos últimos en jugar).
+    const order = circularOrder(Array.from({ length: state.tableSize }, (_, i) => i), state.manoSeat, state.tableSize);
+    if (order.indexOf(seat) < state.tableSize - 2) return false;
+  }
+  return true;
+}
+
+function florChance(state, seat) {
+  return state.players?.[seat]?.florMetric?.pFlor ?? 0;
+}
+
+// ¿Puede `seat` cantar flor ahora? Tiene que ser posible en su mano
+// (alguna combinación de colapsos le da tres del mismo palo).
+export function canSingFlor(state = G, seat = state?.activeSeat) {
+  if (!state || !state.conFlor || state.pendingChant) return false;
+  const flor = state.chant.flor, env = state.chant.envido;
+  if (state.phase !== 'chant' || state.trickIdx !== 0) return false;
+  if (flor.resolved || Object.keys(flor.sungBySeat).length > 0) return false;
+  if (env.resolved || env.calls.length > 0) return false;
+  if (state.playsThisTrick?.[seat]) return false;
+  return florChance(state, seat) > 0;
+}
+
+// ¿Puede quien debe responder un envido contestar "flor"? La flor anula el envido.
+export function canFlorOverEnvido(state = G) {
+  const pc = state?.pendingChant;
+  if (!state || !state.conFlor || !pc || pc.type !== 'envido') return false;
+  const flor = state.chant.flor;
+  if (state.trickIdx !== 0 || flor.resolved || Object.keys(flor.sungBySeat).length > 0) return false;
+  return florChance(state, pc.responderSeat) > 0;
+}
+
+// Puntos de envido/flor (y el punto extra del mazo). Se llevan aparte de los
+// del truco porque se cuentan primero al decidir quién llega al objetivo.
+function addChantPoints(team, pts) {
+  if (!G.handChant) G.handChant = [0, 0];
+  G.handScore[team] += pts;
+  G.handChant[team] += pts;
+}
+
+// Si los puntos de un canto no querido ya alcanzan para ganar, la partida
+// termina ahí mismo, sin jugar el truco.
+function endMatchIfChantWins() {
+  const chant = G.handChant || [0, 0];
+  if (G.scores[0] + chant[0] < G.target && G.scores[1] + chant[1] < G.target) return false;
+  clearChantPending();
+  if (G.bet) delete G.bet._pendingRaise;
+  applyHandScore();
+  return true;
+}
+
 export function deferPendingTrucoAndInitiateEnvido(call) {
-  if (!G || !G.pendingChant || G.pendingChant.type !== 'truco') return;
+  if (!canEnvidoFirst()) return;
   const { level, raiserTeam } = G.pendingChant.data;
   const responderSeat = G.activeSeat;
-  G.bet._pendingRaise = { level, raiserTeam };
+  G.bet._pendingRaise = { level, raiserTeam, callerSeat: G.pendingChant.callerSeat };
   clearChantPending();
   G.activeSeat = responderSeat;
+  announce(responderSeat, '¡El envido está primero!');
   initiateEnvido(call);
 }
 
@@ -620,7 +722,7 @@ export function singTruco() {
   const phrasesForCall = trucoPhrasesMap[nxt.name] || [`¡${nxt.name}!`];
   const callPhrase = phrasesForCall[Math.floor(Math.random() * phrasesForCall.length)];
   uiLog(`${G.players[seat].name}: ${callPhrase}`, 'important');
-  if (runtime.showTrucoCallToast) runtime.showTrucoCallToast(callPhrase);
+  announce(seat, callPhrase);
   setChantPending('truco', seat, oppSeat, { level: bet.level + 1, raiserTeam: actTeam });
 }
 
@@ -636,7 +738,7 @@ export function respondTruco(accept) {
     G.bet.level = level;
     G.bet.lastRaiserTeam = raiserTeam;
     uiLog(`${G.players[responderSeat].name} acepta ${nxt.name}. Vale ${nxt.pts} pts.`, 'important');
-    if (runtime.showTrucoToast) runtime.showTrucoToast(G.players[responderSeat].name);
+    announce(responderSeat, ACCEPT_PHRASES[Math.floor(Math.random() * ACCEPT_PHRASES.length)]);
     G.phase = 'play';
     // The turn goes back to whoever is next in playOrder from where we left off
     // playOrderIdx points to the CURRENT player who should play next
@@ -646,21 +748,24 @@ export function respondTruco(accept) {
   } else {
     G.handScore[raiserTeam] += curPts;
     uiLog(`${G.players[responderSeat].name} rechaza. Eq ${raiserTeam} cobra ${curPts} pts.`, 'points');
+    announce(responderSeat, 'No quiero.');
     finalizeHand();
   }
 }
 
 export function raiseTruco() {
   // Responder raises instead of accepting/rejecting
+  if (!G.pendingChant || G.pendingChant.type !== 'truco') return;
   const { callerSeat, data } = G.pendingChant;
-  clearChantPending();
   // The former responder is now the raiser
   const newRaiserSeat = G.activeSeat;
   const newRaiserTeam = teamOf(newRaiserSeat);
   const newLevel = data.level + 1;
   const nxt = TRUCO_LEVELS[newLevel];
-  if (!nxt) return;
+  if (!nxt) return; // sobre el vale cuatro no hay nada más que cantar
+  clearChantPending();
   uiLog(`${G.players[newRaiserSeat].name} sube a ${nxt.name}!`, 'important');
+  announce(newRaiserSeat, `¡Quiero ${nxt.name.toLowerCase()}!`);
   setChantPending('truco', newRaiserSeat, callerSeat, { level: newLevel, raiserTeam: newRaiserTeam });
 }
 
@@ -669,11 +774,13 @@ export function raiseTruco() {
 export function initiateEnvido(call) {
   const env  = G.chant.envido;
   const seat = G.activeSeat;
+  if (!ENVIDO_CALL_PTS.hasOwnProperty(call) || env.resolved || env.calls.length > 0) return;
   env.callerTeam = teamOf(seat);
   env.callerSeat = seat;
   env.calls.push(call);
   const oppSeat = getOppSeat(seat);
   uiLog(`${G.players[seat].name} canta ${call}.`, 'important');
+  announce(seat, `¡${capitalize(call)}!`);
   setChantPending('envido', seat, oppSeat, { callerSeat: seat });
 }
 
@@ -691,31 +798,40 @@ export function respondEnvido(action) {
     env.accepted = true;
     env.resolved = true;
     uiLog(`${G.players[respSeat].name} acepta. Envido vale ${curPts} pts.`, 'important');
+    announce(respSeat, '¡Quiero!');
     afterEnvidoResolved();
   } else if (action === 'reject') {
     clearChantPending();
     env.resolved = true;
-    G.handScore[env.callerTeam] += rejPts;
+    addChantPoints(env.callerTeam, rejPts);
     uiLog(`${G.players[respSeat].name} rechaza. Eq ${env.callerTeam} cobra ${rejPts} pts.`, 'points');
+    announce(respSeat, 'No quiero.');
+    if (endMatchIfChantWins()) return;
     afterEnvidoResolved();
   } else {
     // raise — action is the call string; roles flip: responder becomes new caller
+    if (!envidoCanRaise(env.calls).includes(action)) return;
     env.calls.push(action);
     env.callerTeam = teamOf(respSeat);
     uiLog(`${G.players[respSeat].name} sube: ${action}.`, 'important');
+    announce(respSeat, `¡${capitalize(action)}!`);
     clearChantPending();
     setChantPending('envido', respSeat, prevCallerSeat, { callerSeat: respSeat });
   }
 }
 
-// After envido is resolved, check if truco was pending
+// Después de resolver un envido o una flor: si había un truco esperando
+// respuesta ("el envido está primero") vuelve a quedar pendiente; si no,
+// sigue el juego.
 function afterEnvidoResolved() {
   if (G.bet._pendingRaise) {
-    const { level, raiserTeam } = G.bet._pendingRaise;
+    const { level, raiserTeam, callerSeat } = G.bet._pendingRaise;
     delete G.bet._pendingRaise;
-    const trucoRaiserSeat = allSeats().find(s => teamOf(s) === raiserTeam) ?? 0;
+    const trucoRaiserSeat = Number.isInteger(callerSeat)
+      ? callerSeat
+      : (allSeats().find(s => teamOf(s) === raiserTeam) ?? 0);
     G.activeSeat = getOppSeat(trucoRaiserSeat);
-    uiLog(`Envido resuelto. Ahora hay que responder el ${TRUCO_LEVELS[level].name}.`, 'important');
+    uiLog(`Ahora hay que responder el ${TRUCO_LEVELS[level].name}.`, 'important');
     setChantPending('truco', trucoRaiserSeat, G.activeSeat, { level, raiserTeam });
   } else {
     G.phase = 'play';
@@ -727,74 +843,100 @@ function afterEnvidoResolved() {
 
 // ── Flor ─────────────────────────────────────────────────────
 
+// Con cartas cuánticas nadie sabe si tiene flor: cantarla es apostar a que
+// va a salir. Por eso al cantar no se cobra nada; todo se liquida al final
+// de la mano en settleChants, con las cartas ya colapsadas.
+
 export function singFlor() {
-  const flor    = G.chant.flor;
-  const seat    = G.activeSeat;
-  const oppSeat = getOppSeat(seat);
+  const seat = G.activeSeat;
+  if (!canSingFlor(G, seat)) return;
+  startFlor(seat);
+}
+
+function startFlor(seat) {
+  const flor = G.chant.flor;
   flor.sungBySeat[seat] = true;
-  const oppFm = G.players[oppSeat].florMetric;
+  G.chant.florBlockedEnvido = true;
   uiLog(`${G.players[seat].name} canta Flor.`, 'important');
-  if (oppFm.pFlor > 0) {
-    setChantPending('flor', seat, oppSeat, { stage: 'initial', firstSeat: seat });
-  } else {
-    G.handScore[teamOf(seat)] += 3;
-    G.chant.florBlockedEnvido = true;
-    flor.resolved = true;
-    uiLog(`Flor sin rival. Eq ${teamOf(seat)} cobra 3 pts.`, 'points');
-    G.phase = 'play';
-    G.activeSeat = G.playOrder[G.playOrderIdx];
-    if (runtime.renderGame) runtime.renderGame(); if (runtime.aiResume) runtime.aiResume();
-  }
+  announce(seat, '¡Flor!');
+  // El rival responde siempre, pueda o no tener flor, así el canto no
+  // revela nada sobre su mano.
+  setChantPending('flor', seat, getOppSeat(seat), { stage: 'initial', firstSeat: seat });
+}
+
+// Responder "flor" a un envido: la flor anula el envido.
+export function florOverEnvido() {
+  if (!canFlorOverEnvido()) return;
+  const seat = G.pendingChant.responderSeat;
+  const env = G.chant.envido;
+  env.calls = [];
+  env.accepted = false;
+  env.resolved = true;
+  uiLog(`${G.players[seat].name} responde con flor: el envido no corre.`, 'important');
+  clearChantPending();
+  G.activeSeat = seat;
+  startFlor(seat);
 }
 
 export function respondFlor(action) {
+  if (!G.pendingChant || G.pendingChant.type !== 'flor') return;
   const { callerSeat, data } = G.pendingChant;
   const flor  = G.chant.flor;
   const seat  = G.activeSeat;
   const { stage, firstSeat } = data;
 
   if (stage === 'initial') {
-    if (action === 'yes') {
+    if (action !== 'yes' && action !== 'no') return;
+    // Solo puede sumarse quien tiene alguna chance de flor.
+    if (action === 'yes' && florChance(G, seat) > 0) {
       flor.sungBySeat[seat] = true;
-      uiLog(`${G.players[seat].name} también tiene Flor.`, 'important');
+      uiLog(`${G.players[seat].name} también canta Flor.`, 'important');
+      announce(seat, '¡Yo también tengo flor!');
       clearChantPending();
       setChantPending('flor', callerSeat, seat, { stage: 'contraflor', firstSeat });
     } else {
-      G.handScore[teamOf(callerSeat)] += 3;
-      G.chant.florBlockedEnvido = true;
       flor.resolved = true;
-      uiLog(`Sin flor rival. Eq ${teamOf(callerSeat)} cobra 3 pts.`, 'points');
+      uiLog(`${G.players[seat].name} no canta flor. Se liquida al final de la mano.`, 'important');
+      announce(seat, 'Con flor me achico.');
       clearChantPending();
-      G.phase = 'play'; G.activeSeat = G.playOrder[G.playOrderIdx]; if (runtime.renderGame) runtime.renderGame(); if (runtime.aiResume) runtime.aiResume();
+      afterEnvidoResolved();
     }
   } else if (stage === 'contraflor') {
     if (action === 'simple') {
-      flor.resolved = true; G.chant.florBlockedEnvido = true;
-      uiLog('Flor simple. Se liquida al final.', 'important');
-      clearChantPending(); G.phase = 'play'; G.activeSeat = G.playOrder[G.playOrderIdx]; if (runtime.renderGame) runtime.renderGame(); if (runtime.aiResume) runtime.aiResume();
-    } else if (action === 'contraflor') {
+      flor.resolved = true;
+      uiLog('Flor contra flor. Se liquida al final de la mano.', 'important');
+      clearChantPending();
+      afterEnvidoResolved();
+    } else if (action === 'contraflor' || action === 'alresto') {
+      const alResto = action === 'alresto';
       flor.contraflorCalled = true;
-      uiLog(`${G.players[seat].name} canta Contraflor.`, 'important');
+      flor.contraflorAlResto = alResto;
+      const lbl = alResto ? 'Contraflor al resto' : 'Contraflor';
+      uiLog(`${G.players[seat].name} canta ${lbl}.`, 'important');
+      announce(seat, `¡${lbl}!`);
       clearChantPending();
-      setChantPending('flor', seat, firstSeat, { stage: 'resp_contraflor', firstSeat, alResto: false });
-    } else if (action === 'alresto') {
-      flor.contraflorCalled = true; flor.contraflorAlResto = true;
-      uiLog(`${G.players[seat].name} canta Contraflor al Resto.`, 'important');
-      clearChantPending();
-      setChantPending('flor', seat, firstSeat, { stage: 'resp_contraflor', firstSeat, alResto: true });
+      setChantPending('flor', seat, firstSeat, { stage: 'resp_contraflor', firstSeat, alResto });
     }
   } else if (stage === 'resp_contraflor') {
     if (action === 'accept') {
-      flor.contraflorAccepted = true; flor.resolved = true; G.chant.florBlockedEnvido = true;
-      const lbl = data.alResto ? 'Contraflor al Resto' : 'Contraflor';
-      uiLog(`${lbl} aceptada. Se liquida al final.`, 'important');
-      clearChantPending(); G.phase = 'play'; G.activeSeat = G.playOrder[G.playOrderIdx]; if (runtime.renderGame) runtime.renderGame(); if (runtime.aiResume) runtime.aiResume();
-    } else {
-      const pts = data.alResto ? 4 : 3;
-      G.handScore[teamOf(callerSeat)] += pts;
-      flor.resolved = true; G.chant.florBlockedEnvido = true;
-      uiLog(`Rechaza contraflor. Eq ${teamOf(callerSeat)} cobra ${pts} pts.`, 'points');
-      clearChantPending(); finalizeHand();
+      flor.contraflorAccepted = true;
+      flor.resolved = true;
+      const lbl = data.alResto ? 'Contraflor al resto' : 'Contraflor';
+      uiLog(`${lbl} querida. Se liquida al final de la mano.`, 'important');
+      announce(seat, '¡Quiero!');
+      clearChantPending();
+      afterEnvidoResolved();
+    } else if (action === 'reject') {
+      // No querida: cobra quien la cantó y el truco se sigue jugando.
+      const pts = data.alResto ? 6 : 4;
+      addChantPoints(teamOf(callerSeat), pts);
+      flor.resolved = true;
+      flor.settled = true;
+      uiLog(`${G.players[seat].name} no quiere la contraflor. Eq ${teamOf(callerSeat)} cobra ${pts} pts.`, 'points');
+      announce(seat, 'No quiero.');
+      clearChantPending();
+      if (endMatchIfChantWins()) return;
+      afterEnvidoResolved();
     }
   }
 }
@@ -911,29 +1053,41 @@ function collapseThisTrick() {
 }
 
 export function goToMazo() {
-  clearChantPending();
+  if (G.pendingChant) return;
   const seat    = G.activeSeat;
   const p       = G.players[seat];
   const oppTeam = 1 - p.team;
   const pts     = TRUCO_LEVELS[G.bet.level].pts;
+  // Irse en la primera baza sin haber jugado carta y sin que se haya cantado
+  // envido, flor ni truco regala además el punto del envido.
+  const env = G.chant.envido;
+  const extra = (G.trickIdx === 0 && G.bet.level === 0 && p.played.length === 0
+    && env.calls.length === 0 && !env.resolved
+    && Object.keys(G.chant.flor.sungBySeat).length === 0) ? 1 : 0;
+  const total = pts + extra;
+  const rival = G.tableSize === 2 ? G.players[oppTeam].name : `Equipo ${oppTeam === 0 ? 'A' : 'B'}`;
+
+  const confirm = () => {
+    G.handScore[oppTeam] += pts;
+    if (extra) addChantPoints(oppTeam, extra);
+    uiLog(`${p.name} al mazo. ${rival} cobra ${total} pts.`, 'points');
+    announce(seat, 'Me voy al mazo.');
+    finalizeHand();
+  };
 
   if (headlessMode || typeof document === 'undefined' || !runtime.showModal) {
-    G.handScore[oppTeam] += pts;
-    uiLog(`${p.name} al mazo. Eq ${oppTeam} cobra ${pts} pts.`, 'points');
-    finalizeHand();
+    confirm();
     return;
   }
 
   runtime.showModal('danger',
     `${p.name} se va al Mazo`,
-    `Eq ${oppTeam} cobra <strong>${pts} pts</strong> de Truco.`,
-    pts,
+    `${rival} cobra <strong>${total} pts</strong>${extra ? ' (1 del truco y 1 por el envido sin cantar)' : ''}.`,
+    total,
     [
       { label: 'Confirmar', cls: 'danger', cb: () => {
-          G.handScore[oppTeam] += pts;
-          uiLog(`${p.name} al mazo. Eq ${oppTeam} cobra ${pts} pts.`, 'points');
           if (runtime.closeModal) runtime.closeModal();
-          finalizeHand();
+          confirm();
       }},
       { label: 'Cancelar', cls: 'primary', cb: () => { if (runtime.closeModal) runtime.closeModal(); } },
     ]
@@ -959,6 +1113,20 @@ function resolveTrick() {
 
     const winner = trickWinner(collapsedMap, G.playOrder);
     G.trickWinners.push(winner.team);
+
+    // Resumen de la baza para que los clientes online puedan reproducirla
+    // (en modo headless la mesa se limpia en el mismo paso).
+    G.eventSeq = (G.eventSeq || 0) + 1;
+    G.lastTrick = {
+      seq: G.eventSeq,
+      handNum: G.handNum,
+      trickIdx: G.trickIdx,
+      winnerTeam: winner.team,
+      plays: G.playOrder.filter(s => G.playsThisTrick[s]).map(s => {
+        const qc = G.playsThisTrick[s];
+        return { seat: s, pairId: qc.pairId, idxInPair: qc.idxInPair, options: qc.options, card: qc.collapsedTo };
+      }),
+    };
 
     if (winner.team !== -1) {
       G.leaderSeat = winner.seat;
@@ -1035,7 +1203,7 @@ function resolveTrick() {
 }
 
 // Sweep cards off the table before starting next trick
-function animateSweepTrick(onDone) {
+export function animateSweepTrick(onDone) {
   if (headlessMode || typeof document === 'undefined' || prefersReducedMotion()) {
     onDone();
     return;
@@ -1088,7 +1256,7 @@ function finalizeHand() {
 
 // Called from renderActionBar "Nueva Mano" when phase===hand_end
 export function startNewHand() {
-  if (G.phase === 'hand_end') {
+  if (G.phase === 'hand_end' && !G.handSettled) {
     settleChants(true); // settle envido + flor; truco already settled in resolveTrick path
     applyHandScore();
   }
@@ -1118,6 +1286,8 @@ function settleChants(includeTruco) {
   if (env.accepted && env.resolved) {
     const pts = envidoTotalIfAccepted(env.calls, env.callerTeam, G.target, G.scores);
     const res = settleEnvido(finalCards, allSeats(), G.players, G.handScore, teamOf(G.manoSeat), pts);
+    if (!G.handChant) G.handChant = [0, 0];
+    G.handChant[res.winner] += pts;
     const playerLines = allSeats().map(seat => {
       const name = G.players[seat].name;
       const score = res.teamScores[teamOf(seat)] ?? 0;
@@ -1125,53 +1295,101 @@ function settleChants(includeTruco) {
     }).join(' · ');
     const winnerName = G.players.find(p => teamOf(p.seat) === res.winner)?.name ?? `Eq ${res.winner}`;
     uiLog(`Envido: ${winnerName} gana ${pts} pts. [${playerLines}]`, 'points');
+    G.lastEnvido = { res, pts, finalCards };
     if (runtime.showEnvidoAnnouncement) runtime.showEnvidoAnnouncement(res, pts, finalCards);
   }
 
   // ── Flor ──
+  // Con cartas cuánticas la flor es una apuesta: se canta sin saber si va a
+  // salir y recién acá, con todo colapsado, se ve quién la tenía de verdad.
+  // Solo cobra quien la cantó. Cantarla y no tenerla le da 3 al rival.
   const flor = G.chant.flor;
-  if (Object.keys(flor.sungBySeat).length > 0) {
-    const teamFlorScores = {};
-    G.players.forEach(p => {
-      if (hasFlor(finalCards[p.seat])) {
-        const fs = florScore(finalCards[p.seat]);
-        teamFlorScores[p.team] = Math.max(teamFlorScores[p.team] ?? -1, fs);
-      }
-    });
-    const florTeams = Object.keys(teamFlorScores).map(Number);
-
-    if (flor.contraflorCalled && flor.contraflorAccepted) {
-      if (florTeams.length === 2) {
-        const winner = teamFlorScores[0] >= teamFlorScores[1] ? 0 : 1;
-        const pts    = flor.contraflorAlResto
-          ? Math.max(G.target - G.scores[1 - winner], 1)
-          : Math.abs(teamFlorScores[0] - teamFlorScores[1]) + 3;
-        G.handScore[winner] += pts;
-        uiLog(`${flor.contraflorAlResto?'Contraflor al Resto':'Contraflor'}: Eq ${winner} cobra ${pts} pts.`, 'points');
-      }
-    } else if (!flor.contraflorCalled || !flor.contraflorAccepted) {
-      if (florTeams.length === 1) {
-        G.handScore[florTeams[0]] += 3;
-        uiLog(`Flor: Eq ${florTeams[0]} cobra 3 pts.`, 'points');
-      } else if (florTeams.length === 2) {
-        const winner = teamFlorScores[0] > teamFlorScores[1] ? 0 :
-                       teamFlorScores[1] > teamFlorScores[0] ? 1 : teamOf(G.manoSeat);
-        G.handScore[winner] += 3;
-        uiLog(`Flor: Eq ${winner} cobra 3 pts.`, 'points');
+  const florSeats = Object.keys(flor.sungBySeat).map(Number);
+  if (florSeats.length > 0 && !flor.settled) {
+    flor.settled = true;
+    const best = {};
+    for (const s of florSeats) {
+      if (hasFlor(finalCards[s])) {
+        const t = teamOf(s);
+        best[t] = Math.max(best[t] ?? -1, florScore(finalCards[s]));
       }
     }
+    const valid = Object.keys(best).map(Number);
+    const sangTeams = [...new Set(florSeats.map(teamOf))];
+    const contra = flor.contraflorCalled && flor.contraflorAccepted;
+    const stake = !contra ? 3 : flor.contraflorAlResto ? faltaEnvidoPoints(G.target, G.scores) : 6;
+    const label = !contra ? 'Flor' : flor.contraflorAlResto ? 'Contraflor al resto' : 'Contraflor';
+    const teamName = (t) => (G.tableSize === 2 ? G.players[t].name : `Equipo ${t === 0 ? 'A' : 'B'}`);
+    let text = '';
+
+    if (valid.length === 2) {
+      const winner = best[0] > best[1] ? 0 : best[1] > best[0] ? 1 : teamOf(G.manoSeat);
+      addChantPoints(winner, stake);
+      text = `${label}: ${best[0]} contra ${best[1]}. ${teamName(winner)} cobra ${stake}.`;
+    } else if (valid.length === 1) {
+      addChantPoints(valid[0], stake);
+      text = `${label}: ${teamName(valid[0])} la tenía (${best[valid[0]]}) y cobra ${stake}.`;
+    } else if (sangTeams.length === 1) {
+      const liar = sangTeams[0];
+      addChantPoints(1 - liar, 3);
+      text = `${teamName(liar)} cantó flor y no le salió: ${teamName(1 - liar)} cobra 3.`;
+    } else {
+      text = `${label}: a nadie le salió la flor. No hay puntos.`;
+    }
+    uiLog(text, 'points');
+    G.lastFlorText = text;
+    if (!headlessMode && runtime.showTrucoCallToast) runtime.showTrucoCallToast(text, 3000);
   }
 }
 
 function applyHandScore() {
-  G.scores[0] += G.handScore[0];
-  G.scores[1] += G.handScore[1];
+  // Una mano se liquida una sola vez (evita el doble clic en "Nueva mano").
+  if (G.handSettled) return;
+  G.handSettled = true;
+
+  // Orden de conteo: primero envido/flor, después truco. Si alguien llega
+  // al objetivo con los cantos, gana ahí y el truco ya no se cuenta.
+  const chant = G.handChant || [0, 0];
+  const truco = [G.handScore[0] - chant[0], G.handScore[1] - chant[1]];
+  const reached = () => {
+    const a = G.scores[0] >= G.target, b = G.scores[1] >= G.target;
+    if (a && b) {
+      if (G.scores[0] !== G.scores[1]) return G.scores[0] > G.scores[1] ? 0 : 1;
+      return teamOf(G.manoSeat);
+    }
+    return a ? 0 : b ? 1 : null;
+  };
+
+  G.scores[0] += chant[0];
+  G.scores[1] += chant[1];
+  let winner = reached();
+  if (winner === null) {
+    G.scores[0] += truco[0];
+    G.scores[1] += truco[1];
+    winner = reached();
+  } else {
+    G.handScore = [chant[0], chant[1]];
+  }
+
   uiLog(`=== Mano ${G.handNum}: +${G.handScore[0]}/${G.handScore[1]} → Total ${G.scores[0]}–${G.scores[1]} ===`, 'important');
 
   if (runtime.aiRecordHand) runtime.aiRecordHand();
 
+  // Resumen de la mano para los clientes online.
+  G.eventSeq = (G.eventSeq || 0) + 1;
+  G.lastHand = {
+    seq: G.eventSeq,
+    handNum: G.handNum,
+    handScore: [...G.handScore],
+    scores: [...G.scores],
+    envido: G.lastEnvido || null,
+    florText: G.lastFlorText || null,
+  };
+  G.lastEnvido = null;
+  G.lastFlorText = null;
+
   const doNext = () => {
-    if (G.scores[0] >= G.target || G.scores[1] >= G.target) showWin();
+    if (winner !== null) showWin(winner);
     else dealNewHand();
   };
 
@@ -1215,6 +1433,8 @@ function dealNewHand() {
   G.pendingChant = null;
   G.trickIdx     = 0;
   G.handScore    = [0, 0];
+  G.handChant    = [0, 0];
+  G.handSettled  = false;
   G.playsThisTrick = {};
   G.leaderSeat   = G.manoSeat;
   G.playOrder    = circularOrder(allSeats(), G.leaderSeat, G.tableSize);
@@ -1227,7 +1447,7 @@ function dealNewHand() {
 }
 
 // ── Deal animation ─────────────────────────────────────────
-function animateDeal(onDone) {
+export function animateDeal(onDone) {
   if (headlessMode || typeof document === 'undefined') {
     if (runtime.showScreen) runtime.showScreen('screen-game');
     if (runtime.renderGame) runtime.renderGame();
@@ -1314,8 +1534,10 @@ function dealCardsAnimated(onDone) {
   setTimeout(onDone, (order.length - 1) * STEP + FLY + 380);
 }
 
-function showWin() {
-  const winner = G.scores[0] >= G.target ? 0 : 1;
+function showWin(winnerTeam) {
+  const winner = (winnerTeam === 0 || winnerTeam === 1)
+    ? winnerTeam
+    : (G.scores[0] >= G.target ? 0 : 1);
   const name   = G.tableSize === 2
     ? G.players[winner === 0 ? 0 : 1].name
     : `Equipo ${winner}`;
@@ -1338,8 +1560,10 @@ export function validateIntentActor(seat, type) {
   return !G.pendingChant && G.activeSeat === seat;
 }
 
+// Rival que responde un canto: el que sigue en la ronda (los equipos se
+// sientan alternados, así que el siguiente siempre es del otro equipo).
 export function getOppSeat(seat) {
-  return allSeats().find(s => teamOf(s) !== teamOf(seat)) ?? (1 - seat);
+  return (seat + 1) % G.tableSize;
 }
 
 // ── modal ────────────────────────────────────────────────────

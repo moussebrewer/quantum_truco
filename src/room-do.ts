@@ -19,6 +19,13 @@ import {
   envidoCanRaise,
   canTeamRaiseNow,
   teamOf,
+  canEnvidoFirst,
+  canOpenEnvido,
+  canSingFlor,
+  canFlorOverEnvido,
+  florOverEnvido,
+  deferPendingTrucoAndInitiateEnvido,
+  configureGameRuntime,
 } from './game';
 
 export interface Env {
@@ -100,6 +107,8 @@ function computeStatusText(meta, state, seat) {
 
 function filterStateForSeat(fullState, seat, meta) {
   const state = cloneGameState(fullState);
+  // El cliente no necesita el mazo, y trae el orden de las cartas sin repartir.
+  state.deck = null;
   state.onlineMode = true;
   state.viewerSeat = seat;
   state.roomCode = meta.roomCode;
@@ -118,27 +127,44 @@ function filterStateForSeat(fullState, seat, meta) {
   return state;
 }
 
-function validateIntent(state, seat, intent) {
-  if (intent.type === 'request_rematch' || intent.type === 'leave_room') return true;
+const ENVIDO_CALLS = ['envido', 'real envido', 'falta envido'];
+const FLOR_ACTIONS = {
+  initial: ['yes', 'no'],
+  contraflor: ['simple', 'contraflor', 'alresto'],
+  resp_contraflor: ['accept', 'reject'],
+};
+
+export function validateIntent(state, seat, intent) {
+  if (intent.type === 'request_rematch' || intent.type === 'leave_room' || intent.type === 'chat') return true;
   if (!state || state.matchEnded) return false;
 
   if (state.pendingChant) {
-    if (state.pendingChant.responderSeat !== seat) return false;
-    if (state.pendingChant.type === 'truco') {
-      return intent.type === 'respond_truco' || intent.type === 'raise_truco';
+    const pc = state.pendingChant;
+    if (pc.responderSeat !== seat) return false;
+    if (pc.type === 'truco') {
+      if (intent.type === 'envido_first') {
+        return canEnvidoFirst(state) && ENVIDO_CALLS.includes(intent.call);
+      }
+      if (intent.type === 'respond_truco') return intent.action === 'accept' || intent.action === 'reject';
+      // Sobre el vale cuatro no hay nada más que cantar.
+      if (intent.type === 'raise_truco') return (pc.data?.level ?? 3) < 3;
+      return false;
     }
-    if (state.pendingChant.type === 'envido') {
+    if (pc.type === 'envido') {
+      if (intent.type === 'flor_over_envido') return canFlorOverEnvido(state);
       if (intent.type !== 'respond_envido') return false;
       if (intent.action === 'accept' || intent.action === 'reject') return true;
-      return envidoCanRaise(state.chant.envido.calls[state.chant.envido.calls.length - 1]).includes(intent.action);
+      return envidoCanRaise(state.chant.envido.calls).includes(intent.action);
     }
-    if (state.pendingChant.type === 'flor') {
-      return intent.type === 'respond_flor';
+    if (pc.type === 'flor') {
+      if (intent.type !== 'respond_flor') return false;
+      return (FLOR_ACTIONS[pc.data?.stage] || []).includes(intent.action);
     }
     return false;
   }
 
   if (state.activeSeat !== seat) return false;
+  if (state.phase !== 'chant' && state.phase !== 'play') return false;
 
   if (intent.type === 'play_card') {
     return Number.isInteger(intent.cardIndex) && intent.cardIndex >= 0 && intent.cardIndex < state.players[seat].hand.length;
@@ -147,25 +173,31 @@ function validateIntent(state, seat, intent) {
     return canTeamRaiseNow(state.bet, teamOf(seat));
   }
   if (intent.type === 'initiate_envido') {
-    const env = state.chant.envido;
-    return state.trickIdx === 0
-      && !env.resolved
-      && !state.chant.florBlockedEnvido
-      && env.calls.length === 0
-      && ['envido', 'real envido', 'falta envido'].includes(intent.call);
+    return canOpenEnvido(state, seat) && ENVIDO_CALLS.includes(intent.call);
   }
   if (intent.type === 'sing_flor') {
-    return !!state.conFlor && !state.chant.flor.resolved && !state.chant.florBlockedEnvido;
+    return canSingFlor(state, seat);
   }
   if (intent.type === 'go_to_mazo') return true;
   return false;
 }
 
-function applyIntentToState(state, intent) {
+const LOG_TAIL = 60;
+
+export function applyIntentToState(state, intent) {
   setHeadlessMode(true);
   setGameState(cloneGameState(state));
+  // Lo que el motor escribe en el log durante esta jugada.
+  const logged = [];
+  configureGameRuntime({ log: (msg, cls) => logged.push({ msg, cls: cls || '' }) });
   try {
     switch (intent.type) {
+      case 'envido_first':
+        deferPendingTrucoAndInitiateEnvido(intent.call);
+        break;
+      case 'flor_over_envido':
+        florOverEnvido();
+        break;
       case 'play_card':
         onCardClick(intent.cardIndex);
         break;
@@ -196,8 +228,17 @@ function applyIntentToState(state, intent) {
       default:
         break;
     }
-    return cloneGameState(getGameState());
+    const result = cloneGameState(getGameState());
+    // Las últimas líneas del log viajan con el estado, numeradas, para que
+    // cada cliente agregue solo las que todavía no mostró.
+    let n = state.logN || 0;
+    const tail = [...(state.logTail || [])];
+    for (const entry of logged) tail.push({ n: ++n, ...entry });
+    result.logN = n;
+    result.logTail = tail.slice(-LOG_TAIL);
+    return result;
   } finally {
+    configureGameRuntime({ log: null });
     setGameState(null);
     setHeadlessMode(false);
   }
@@ -255,6 +296,7 @@ export class RoomDurableObject {
     this.meta = null;
     this.game = null;
     this.sockets = new Map();
+    this.chatTimes = new Map();
   }
 
   async load() {
@@ -341,6 +383,24 @@ export class RoomDurableObject {
       this.sockets.delete(seat);
       await this.persist();
       if (this.sockets.has(1 - seat)) this.broadcastState('presence_update');
+      return;
+    }
+
+    if (intent.type === 'chat') {
+      const text = String(intent.text || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+      if (!text) return;
+      // Freno simple: como mucho 5 mensajes cada 5 segundos por jugador.
+      const now = Date.now();
+      const recent = (this.chatTimes.get(seat) || []).filter(t => now - t < 5000);
+      if (recent.length >= 5) return;
+      recent.push(now);
+      this.chatTimes.set(seat, recent);
+
+      this.meta.chatN = (this.meta.chatN || 0) + 1;
+      const msg = { n: this.meta.chatN, seat, text };
+      this.meta.chat = [...(this.meta.chat || []), msg].slice(-40);
+      await this.persist();
+      for (const sock of this.sockets.values()) this.send(sock, { type: 'chat', message: msg });
       return;
     }
 
@@ -433,6 +493,8 @@ export class RoomDurableObject {
 
       if (this.game) this.broadcastState();
       else this.broadcastWaiting();
+      // Al (re)conectarse, el jugador recibe el chat que hubo hasta ahora.
+      this.send(server, { type: 'chat_history', messages: this.meta.chat || [] });
 
       return new Response(null, { status: 101, webSocket: client });
     }

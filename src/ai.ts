@@ -205,7 +205,7 @@ export function aiHandlePendingChant() {
   } else if (pc.type === 'envido') {
     const env    = G.chant.envido;
     const metric = G.players[G.aiSeat].metric;
-    const raises = envidoCanRaise(env.calls[env.calls.length - 1]);
+    const raises = envidoCanRaise(env.calls);
     const roll   = Math.random();
     let decision = 'reject';
 
@@ -250,7 +250,8 @@ export function aiHandlePendingChant() {
   } else if (pc.type === 'flor') {
     const { stage } = pc.data;
     if (stage === 'initial') {
-      const hasFlorChance = G.players[G.aiSeat].florMetric.pFlor > 0;
+      // La flor es una apuesta: solo se suma si es más probable que le salga.
+      const hasFlorChance = G.players[G.aiSeat].florMetric.pFlor >= 0.5;
       uiLog(`[IA] Flor: ${hasFlorChance ? 'Sí' : 'No'}`, 'important');
       respondFlor(hasFlorChance ? 'yes' : 'no');
     } else if (stage === 'contraflor') {
@@ -280,7 +281,7 @@ function aiChantTurn(diff) {
   const tl = G.trickWinners.filter(w => w !== p.team && w !== -1).length;
 
   // 1. Envido (baza 0 only, no prior calls)
-  if (G.trickIdx === 0 && !G.chant.envido.resolved && !G.chant.florBlockedEnvido && G.chant.envido.calls.length === 0) {
+  if (G.trickIdx === 0 && G.bet.level === 0 && !G.chant.envido.resolved && !G.chant.florBlockedEnvido && G.chant.envido.calls.length === 0) {
     const call = diff === 'legend' ? legendEnvidoCall(p.metric) : aiDecideEnvidoCall(p.metric, diff);
     if (call) {
       uiLog(`[IA] Canta ${call}`, 'important');

@@ -122,13 +122,7 @@ wrangler dev src/room-do.ts --local
 
 This runs on `http://localhost:8787`. Durable Object state is persisted locally under `.wrangler/state/` so rooms survive restarts during a session.
 
-Then point the frontend at your local Worker. In `online.ts`, change `onlineBase()`:
-
-```ts
-function onlineBase() {
-  return 'http://localhost:8787'; // local dev
-}
-```
+The frontend picks the server automatically: under `npm run dev` it talks to the local Worker on port 8787, and a production build talks to the deployed Worker. To override either one, set `VITE_ONLINE_URL` (for example in a `.env.local` file).
 
 Start the frontend in a second terminal:
 
@@ -148,7 +142,7 @@ Open two browser tabs, select **Online 1v1**, create a room in one tab, copy the
 wrangler deploy src/room-do.ts
 ```
 
-Wrangler prints the deployed URL — something like `https://quantum-truco-online.<your-subdomain>.workers.dev`. Update `onlineBase()` in `online.ts` to return that URL, then build the frontend.
+Wrangler prints the deployed URL — something like `https://quantum-truco-online.<your-subdomain>.workers.dev`. Set `DEPLOYED_ONLINE_URL` in `online.ts` to that URL (or pass `VITE_ONLINE_URL` when building), then build the frontend.
 
 ### Build and deploy the frontend
 

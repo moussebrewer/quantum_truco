@@ -22,6 +22,8 @@ import {
   closeModal,
   log,
   toggleLog,
+  toggleChat,
+  showSay,
 } from './ui';
 
 import {
@@ -148,6 +150,7 @@ const APP_HTML = `<!-- ═══════════════════
     <div class="header-actions">
       <div class="online-header-status" id="online-header-status"></div>
       <button class="quantum-btn-small" id="btn-online-leave" onclick="leaveOnlineRoom()" style="display:none">Salir</button>
+      <button class="quantum-btn-small chat-toggle" id="btn-chat-toggle" onclick="toggleChat()">Chat<span class="chat-badge" id="chat-badge" style="display:none">0</span></button>
       <button class="quantum-btn-small" id="btn-log-toggle" onclick="toggleLog()">Log</button>
     </div>
   </div>
@@ -181,6 +184,7 @@ const APP_HTML = `<!-- ═══════════════════
         </div>
       </div>
       <div class="hand-area">
+        <div class="turn-banner empty" id="turn-banner"></div>
         <div class="hand-row" id="hand-row"></div>
         <div class="envido-info" id="envido-info"></div>
       </div>
@@ -192,6 +196,18 @@ const APP_HTML = `<!-- ═══════════════════
       <div class="history-panel" id="history-panel">
         <div class="history-title">Bazas</div>
         <div class="history-list" id="history-list"></div>
+      </div>
+      <!-- Chat: solo se ve en partidas online -->
+      <div class="chat-panel" id="chat-panel">
+        <div class="chat-header">
+          <span>Chat</span>
+          <button class="log-close-btn chat-close" onclick="toggleChat()" title="Cerrar chat">✕</button>
+        </div>
+        <div class="chat-list" id="chat-list"></div>
+        <form class="chat-form" id="chat-form" autocomplete="off">
+          <input class="chat-input" id="chat-input" maxlength="200" placeholder="Escribí un mensaje…" />
+          <button class="chat-send" type="submit" title="Enviar">➤</button>
+        </form>
       </div>
       <div class="chant-panel">
         <div class="chant-turn" id="chant-turn">Turno</div>
@@ -299,6 +315,7 @@ configureGameRuntime({
   setEnvidoOverlayOnClose,
   showTrucoCallToast,
   showTrucoToast,
+  showSay,
   showEnvidoAnnouncement,
   showModal,
   closeModal,
@@ -329,6 +346,7 @@ window.startGame = () => {
 };
 window.dismissPass = dismissPass;
 window.toggleLog = toggleLog;
+window.toggleChat = toggleChat;
 window.restartGame = () => {
   if (isOnlineClientMode()) {
     requestOnlineRematch();
