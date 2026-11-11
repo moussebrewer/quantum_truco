@@ -1422,13 +1422,16 @@ function applyHandScore() {
 }
 
 // ── Pica-pica ────────────────────────────────────────────────
-// De a cuatro, mientras el equipo que va ganando tiene entre 5 puntos y
-// 5 menos que el objetivo, se alterna una mano "redonda" (todos contra
-// todos, en equipo) con una de pica-pica: cada jugador juega mano a mano
-// contra el rival que tiene al lado, un duelo después del otro, y los
-// puntos de los dos duelos se suman a los equipos.
+// Reservado para un futuro modo de a seis: de a cuatro NO se juega.
+// Mientras el equipo que va ganando tiene entre 5 puntos y 5 menos que el
+// objetivo, se alterna una mano "redonda" (todos, en equipo) con una de
+// pica-pica: duelos mano a mano, uno después del otro, con las mismas
+// cartas, y los puntos se suman a los equipos.
+// OJO: el armado de duelos de dealNewHand está escrito para cuatro
+// asientos; al sumar el modo de a seis hay que rehacerlo (tres duelos,
+// cada uno contra el rival de enfrente).
 function shouldPlayPica() {
-  if (G.tableSize !== 4 || G.pica === false) return false;
+  if (G.tableSize !== 6 || G.pica === false) return false;
   const top = Math.max(G.scores[0], G.scores[1]);
   if (top < 5 || top >= G.target - 5) return false;
   return !G.lastHandWasPica;
