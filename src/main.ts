@@ -36,6 +36,8 @@ import {
   dismissPass,
 } from './game';
 
+import { initTutorial, openTutorial, closeTutorial } from './tutorial';
+
 import {
   bootstrapOnlineUi,
   createOnlineRoomFromUI,
@@ -115,12 +117,31 @@ const APP_HTML = `<!-- ═══════════════════
       <div class="online-status" id="online-status">Elegí crear una sala o ingresá un código para unirte.</div>
     </div>
     <button class="start-btn" id="btn-start-game" onclick="startGame()">COMENZAR PARTIDA →</button>
+    <button class="help-btn" onclick="openTutorial()">¿Cómo se juega?</button>
   </div>
 </div>
 
 <!-- ══════════════════════════════════════════════════════════ -->
 <!-- PASS PHONE OVERLAY (modal sobre la game screen)           -->
 <!-- ══════════════════════════════════════════════════════════ -->
+<!-- Tutorial -->
+<div id="screen-help" class="screen">
+  <div class="help-top">
+    <button class="quantum-btn-small" onclick="closeTutorial()">← Volver</button>
+    <div class="help-title">Cómo se juega</div>
+  </div>
+  <div class="help-tracks" id="help-tracks">
+    <button class="opt-btn selected" data-track="knows">Ya sé jugar al truco</button>
+    <button class="opt-btn" data-track="new">Nunca jugué al truco</button>
+  </div>
+  <div class="help-slide" id="help-slide"></div>
+  <div class="help-nav">
+    <button class="continue-btn secondary" id="help-prev">← Atrás</button>
+    <div class="help-dots" id="help-dots"></div>
+    <button class="continue-btn" id="help-next">Siguiente →</button>
+  </div>
+</div>
+
 <div class="pass-overlay" id="pass-overlay">
   <div class="pass-box">
     <div class="pass-title" id="pass-title">TURNO</div>
@@ -311,6 +332,7 @@ declare global {
 
 mountApp();
 initSetupOptions();
+initTutorial();
 
 configureGameRuntime({
   renderGame,
@@ -359,6 +381,8 @@ window.startGame = () => {
   startLocalGame();
 };
 window.clearLog = clearLog;
+window.openTutorial = () => openTutorial();
+window.closeTutorial = closeTutorial;
 
 // Botón "Salir" de la partida: pregunta antes y vuelve al menú principal.
 // Offline la partida se cancela; online se abandona la sala.

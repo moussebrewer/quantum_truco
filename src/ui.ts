@@ -592,7 +592,11 @@ function renderActionPanel() {
 
   if (G.phase === 'collapsing') { turnLbl.textContent = '⊗ Colapsando…'; return; }
 
-  if (G.aiSeat !== null && G.aiThinking && !G.pendingChant) {
+  // Turno de la IA: nunca se muestran sus botones (si no, quien juega podría
+  // cantar o irse al mazo en nombre de ella mientras "piensa").
+  const aiTurn = G.aiSeat !== null && !G.pendingChant
+    && (G.aiThinking || (G.activeSeat === G.aiSeat && (G.phase === 'play' || G.phase === 'chant')));
+  if (aiTurn) {
     turnLbl.textContent = `${G.players[G.aiSeat].name} está pensando…`;
     return;
   }
