@@ -54,6 +54,7 @@ import {
 
 import { flying, arenaKey, COLLAPSE_DUR, COLLAPSE_STAGGER } from './anim';
 import { buildCardSVG, buildEntangled } from './cards';
+import { tr, trText } from './i18n';
 
 export function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -65,8 +66,8 @@ export function showPassOverlay(playerName) {
   const title = document.getElementById('pass-title');
   const sub = document.getElementById('pass-sub');
   const overlay = document.getElementById('pass-overlay');
-  if (title) title.textContent = `TURNO: ${playerName.toUpperCase()}`;
-  if (sub) sub.textContent = `Pasá el dispositivo a ${playerName}. Que nadie mire.`;
+  if (title) title.textContent = tr(`TURNO: ${playerName.toUpperCase()}`, `TURN: ${playerName.toUpperCase()}`);
+  if (sub) sub.textContent = tr(`Pasá el dispositivo a ${playerName}. Que nadie mire.`, `Pass the device to ${playerName}. No peeking.`);
   if (overlay) overlay.classList.add('open');
 }
 
@@ -90,9 +91,9 @@ export function showWinScreen(title, subtitle, score) {
   // sala (rival desconectado, revancha pedida) se muestra debajo.
   const online = !!G?.onlineMode;
   const again = document.getElementById('btn-win-again');
-  if (again) again.textContent = online ? 'Pedir revancha' : 'Nueva partida';
+  if (again) again.textContent = online ? tr('Pedir revancha', 'Ask for a rematch') : tr('Nueva partida', 'New game');
   const status = document.getElementById('win-status');
-  if (status) status.textContent = online ? (G.statusText || '') : '';
+  if (status) status.textContent = online ? trText(G.statusText || '') : '';
 }
 
 function getEnvidoOverlayEl() {
@@ -238,7 +239,7 @@ function dispatchGoToMazo() {
 // Nombre visible de un equipo: en mano a mano es el nombre del jugador.
 export function teamLabel(team) {
   if (G && G.tableSize === 2 && G.players?.[team]) return G.players[team].name;
-  return team === 0 ? 'Equipo A' : 'Equipo B';
+  return team === 0 ? tr('Equipo A', 'Team A') : tr('Equipo B', 'Team B');
 }
 
 export function renderGame() {
@@ -262,14 +263,14 @@ function updateHeader() {
   for (const t of [0, 1]) {
     const nameEl = document.getElementById(`score-name-${t}`);
     const mine = G.onlineMode && G.tableSize > 2 && teamOf(getViewerSeatForRender()) === t;
-    if (nameEl) nameEl.textContent = teamLabel(t) + (mine ? ' · vos' : '');
+    if (nameEl) nameEl.textContent = teamLabel(t) + (mine ? tr(' · vos', ' · you') : '');
     const numEl = document.getElementById(`score-num-${t}`);
     if (numEl) numEl.textContent = String(scores[t]);
   }
   const duel = G.duelSeats
     ? ` · Pica-pica: ${G.players[G.duelSeats[0]].name} vs ${G.players[G.duelSeats[1]].name}`
     : '';
-  document.getElementById('hdr-round').textContent = `Mano ${handNum} · Baza ${G.trickIdx+1}${duel}`;
+  document.getElementById('hdr-round').textContent = tr(`Mano ${handNum} · Baza ${G.trickIdx+1}${duel}`, `Hand ${handNum} · Trick ${G.trickIdx+1}${duel}`);
   const lvl = TRUCO_LEVELS[bet.level];
   document.getElementById('hdr-bet').textContent = `Truco: ${lvl.name} (${lvl.pts} pt${lvl.pts>1?'s':''})`;
 }
@@ -407,7 +408,7 @@ export function renderArena() {
     if (last === undefined) {
       bazaEl.textContent = '';
     } else {
-      bazaEl.textContent = last === -1 ? '⚔ Parda' : `▲ Gana ${teamLabel(last)}`;
+      bazaEl.textContent = last === -1 ? tr('⚔ Parda', '⚔ Tie (parda)') : tr(`▲ Gana ${teamLabel(last)}`, `▲ ${teamLabel(last)} wins`);
       bazaEl.style.color = last === -1 ? 'var(--gold)' : last === 0 ? 'var(--accent-a)' : 'var(--accent-b)';
       slotsEl.querySelectorAll('.arena-slot').forEach(s => {
         if (last === -1) s.classList.add('winner-draw');
@@ -416,7 +417,7 @@ export function renderArena() {
       });
     }
   } else if (G.phase === 'collapsing') {
-    bazaEl.textContent = '⊗ Colapsando…';
+    bazaEl.textContent = tr('⊗ Colapsando…', '⊗ Collapsing…');
     bazaEl.style.color = 'rgba(0,200,255,0.8)';
   } else {
     bazaEl.textContent = '';
@@ -451,7 +452,7 @@ function renderOpponentIndicator() {
 
   const info = document.createElement('div');
   info.className = 'opp-info';
-  const oppName = oppSeats.length === 1 ? G.players[oppSeats[0]].name : 'Rivales';
+  const oppName = oppSeats.length === 1 ? G.players[oppSeats[0]].name : tr('Rivales', 'Opponents');
   info.innerHTML = `<span class="opp-name"></span>${isMano ? '<span class="opp-mano">✦ mano</span>' : ''}`;
   info.querySelector('.opp-name').textContent = oppName;
   ind.appendChild(info);
@@ -543,9 +544,9 @@ function renderEnvidoInfo(p, el) {
   });
   const lm = envidoMetric(liveHand);
   let html = `
-    <div class="envido-stat"><span class="envido-stat-label">Envido medio</span><span class="envido-stat-val">${lm.mu.toFixed(1)}</span></div>
+    <div class="envido-stat"><span class="envido-stat-label">${tr('Envido medio', 'Avg. envido')}</span><span class="envido-stat-val">${lm.mu.toFixed(1)}</span></div>
     <div class="envido-stat"><span class="envido-stat-label">P(≥28)</span><span class="envido-stat-val">${(lm.p28*100).toFixed(0)}%</span></div>
-    <div class="envido-stat"><span class="envido-stat-label">Rango</span><span class="envido-stat-val">${lm.min}–${lm.max}</span></div>`;
+    <div class="envido-stat"><span class="envido-stat-label">${tr('Rango', 'Range')}</span><span class="envido-stat-val">${lm.min}–${lm.max}</span></div>`;
   if (G.conFlor) {
     const fm = p.florMetric;
     html += `<div class="envido-stat"><span class="envido-stat-label">P(Flor)</span><span class="envido-stat-val">${(fm.pFlor*100).toFixed(0)}%</span></div>`;
@@ -567,7 +568,7 @@ function renderHistoryPanel() {
 
     const hdr = document.createElement('div');
     hdr.className = 'history-baza-header';
-    hdr.textContent = `Baza ${idx + 1}`;
+    hdr.textContent = tr(`Baza ${idx + 1}`, `Trick ${idx + 1}`);
     baza.appendChild(hdr);
 
     const row = document.createElement('div');
@@ -588,7 +589,7 @@ function renderHistoryPanel() {
 
     const wlbl = document.createElement('div');
     wlbl.className = 'history-winner';
-    if (winner === -1) { wlbl.textContent = '⚔ Parda'; wlbl.style.color = 'var(--gold)'; }
+    if (winner === -1) { wlbl.textContent = tr('⚔ Parda', '⚔ Tie (parda)'); wlbl.style.color = 'var(--gold)'; }
     else { wlbl.textContent = `▲ ${teamLabel(winner)}`; wlbl.style.color = winner===0?'var(--accent-a)':'var(--accent-b)'; }
     baza.appendChild(wlbl);
     list.appendChild(baza);
@@ -601,24 +602,24 @@ function renderActionPanel() {
   if (!turnLbl || !btns) return;
   btns.innerHTML = '';
 
-  if (G.phase === 'collapsing') { turnLbl.textContent = '⊗ Colapsando…'; return; }
+  if (G.phase === 'collapsing') { turnLbl.textContent = tr('⊗ Colapsando…', '⊗ Collapsing…'); return; }
 
   // Turno de la IA: nunca se muestran sus botones (si no, quien juega podría
   // cantar o irse al mazo en nombre de ella mientras "piensa").
   const aiTurn = G.aiSeat !== null && !G.pendingChant
     && (G.aiThinking || (G.activeSeat === G.aiSeat && (G.phase === 'play' || G.phase === 'chant')));
   if (aiTurn) {
-    turnLbl.textContent = `${G.players[G.aiSeat].name} está pensando…`;
+    turnLbl.textContent = tr(`${G.players[G.aiSeat].name} está pensando…`, `${G.players[G.aiSeat].name} is thinking…`);
     return;
   }
 
   const viewerSeat = getViewerSeatForRender();
 
   if (G.onlineMode && G.statusText) {
-    addChantState(btns, 'Sala', G.statusText, '');
+    addChantState(btns, tr('Sala', 'Room'), trText(G.statusText), '');
   }
   if (G.onlineMode && G.opponentConnected === false) {
-    turnLbl.textContent = 'Esperando rival…';
+    turnLbl.textContent = tr('Esperando rival…', 'Waiting for opponent…');
     return;
   }
 
@@ -628,14 +629,14 @@ function renderActionPanel() {
     } else {
       const caller = G.players[G.pendingChant.callerSeat];
       const responder = G.players[G.pendingChant.responderSeat];
-      turnLbl.textContent = `Turno de ${responder.name}`;
-      addChantState(btns, `${caller.name} cantó`, G.pendingChant.type.toUpperCase(), 'Esperando respuesta');
+      turnLbl.textContent = tr(`Turno de ${responder.name}`, `${responder.name}'s turn`);
+      addChantState(btns, tr(`${caller.name} cantó`, `${caller.name} called`), G.pendingChant.type.toUpperCase(), tr('Esperando respuesta', 'Waiting for an answer'));
     }
     return;
   }
 
   if (G.onlineMode && viewerSeat !== G.activeSeat) {
-    turnLbl.textContent = `Turno de ${G.players[G.activeSeat].name}`;
+    turnLbl.textContent = tr(`Turno de ${G.players[G.activeSeat].name}`, `${G.players[G.activeSeat].name}'s turn`);
     return;
   }
 
@@ -656,7 +657,7 @@ function renderActionPanel() {
     // La flor solo se ofrece si alguna combinación de colapsos te la da.
     if (canSingFlor(G, seat)) {
       const pct = Math.round((p.florMetric?.pFlor ?? 0) * 100);
-      addBtn(btns, `🌸 Flor (${pct}% de tenerla)`, 'flor', dispatchSingFlor);
+      addBtn(btns, tr(`🌸 Flor (${pct}% de tenerla)`, `🌸 Flor (${pct}% chance)`), 'flor', dispatchSingFlor);
     }
     if (canTeamRaiseNow(bet, actTeam)) {
       const nxt = TRUCO_LEVELS[bet.level + 1];
@@ -673,12 +674,12 @@ function renderActionPanel() {
 
   } else if (G.phase === 'baza_end') {
     const last = G.trickWinners[G.trickWinners.length - 1];
-    turnLbl.textContent = last === -1 ? '⚔ Parda' : `${teamLabel(last)} gana`;
+    turnLbl.textContent = last === -1 ? tr('⚔ Parda', '⚔ Tie (parda)') : tr(`${teamLabel(last)} gana`, `${teamLabel(last)} wins`);
     // Entre baza y baza no se canta: el truco se canta en tu turno.
 
   } else if (G.phase === 'hand_end') {
     turnLbl.textContent = `+${G.handScore[0]} / +${G.handScore[1]}`;
-    if (!G.onlineMode) addBtn(btns, 'Nueva Mano →', 'primary', startNewHand);
+    if (!G.onlineMode) addBtn(btns, tr('Nueva Mano →', 'Next hand →'), 'primary', startNewHand);
   }
 }
 
@@ -697,9 +698,9 @@ function renderPendingChant(turnLbl, btns) {
 
     turnLbl.textContent = p.name;
     addChantState(btns,
-      `${caller.name} canta`,
+      tr(`${caller.name} canta`, `${caller.name} calls`),
       nxt.name.toUpperCase(),
-      `Querer: ${nxt.pts} pts | Rechazar: ${teamLabel(raiserTeam)} cobra ${curPts} pt${curPts>1?'s':''}`
+      tr(`Querer: ${nxt.pts} pts | Rechazar: ${teamLabel(raiserTeam)} cobra ${curPts} pt${curPts>1?'s':''}`, `Accept: ${nxt.pts} pts | Decline: ${teamLabel(raiserTeam)} gets ${curPts} pt${curPts>1?'s':''}`)
     );
 
     addBtn(btns, `✓ Quiero (${nxt.pts}p)`, 'success', () => dispatchRespondTruco(true));
@@ -726,9 +727,9 @@ function renderPendingChant(turnLbl, btns) {
 
     turnLbl.textContent = p.name;
     addChantState(btns,
-      `${caller.name} canta`,
+      tr(`${caller.name} canta`, `${caller.name} calls`),
       callStr,
-      `Querer: ${curPts} pts | Rechazar: ${teamLabel(env.callerTeam)} cobra ${rejPts} pts`
+      tr(`Querer: ${curPts} pts | Rechazar: ${teamLabel(env.callerTeam)} cobra ${rejPts} pts`, `Accept: ${curPts} pts | Decline: ${teamLabel(env.callerTeam)} gets ${rejPts} pts`)
     );
 
     addBtn(btns, `✓ Quiero (${curPts}p)`, 'success', () => dispatchRespondEnvido('accept'));
@@ -740,7 +741,7 @@ function renderPendingChant(turnLbl, btns) {
     if (canFlorOverEnvido()) {
       const pct = Math.round((G.players[pc.responderSeat].florMetric?.pFlor ?? 0) * 100);
       addSep(btns);
-      addBtn(btns, `🌸 Flor (${pct}%): anula el envido`, 'flor', dispatchFlorOverEnvido);
+      addBtn(btns, tr(`🌸 Flor (${pct}%): anula el envido`, `🌸 Flor (${pct}%): cancels the envido`), 'flor', dispatchFlorOverEnvido);
     }
 
   } else if (pc.type === 'flor') {
@@ -749,14 +750,14 @@ function renderPendingChant(turnLbl, btns) {
 
     if (stage === 'initial') {
       const myPct = Math.round((G.players[pc.responderSeat].florMetric?.pFlor ?? 0) * 100);
-      addChantState(btns, `${caller.name} canta`, 'FLOR',
-        'Se cobra al final: 3 si le sale. Si no le sale, los 3 son para vos.');
-      if (myPct > 0) addBtn(btns, `🌸 Yo también (${myPct}% de tenerla)`, 'success', () => dispatchRespondFlor('yes'));
-      addBtn(btns, 'Seguir sin flor', 'primary', () => dispatchRespondFlor('no'));
+      addChantState(btns, tr(`${caller.name} canta`, `${caller.name} calls`), 'FLOR',
+        tr('Se cobra al final: 3 si le sale. Si no le sale, los 3 son para vos.', 'Scored at the end: 3 if they get it. If they do not, the 3 are yours.'));
+      if (myPct > 0) addBtn(btns, tr(`🌸 Yo también (${myPct}% de tenerla)`, `🌸 Me too (${myPct}% chance)`), 'success', () => dispatchRespondFlor('yes'));
+      addBtn(btns, tr('Seguir sin flor', 'Continue without flor'), 'primary', () => dispatchRespondFlor('no'));
 
     } else if (stage === 'contraflor') {
-      addChantState(btns, 'Los dos cantaron flor', '¿CONTRAFLOR?', 'Gana la flor más alta que salga al colapsar.');
-      addBtn(btns, 'Dejarla en flor (3p)', 'primary', () => dispatchRespondFlor('simple'));
+      addChantState(btns, tr('Los dos cantaron flor', 'Both called flor'), '¿CONTRAFLOR?', tr('Gana la flor más alta que salga al colapsar.', 'The highest flor after the collapse wins.'));
+      addBtn(btns, tr('Dejarla en flor (3p)', 'Leave it at flor (3p)'), 'primary', () => dispatchRespondFlor('simple'));
       addBtn(btns, 'Contraflor (6p)', 'gold', () => dispatchRespondFlor('contraflor'));
       addBtn(btns, `Contraflor al resto (${faltaEnvidoPoints(G.target, G.scores)}p)`, 'danger', () => dispatchRespondFlor('alresto'));
 
@@ -765,8 +766,8 @@ function renderPendingChant(turnLbl, btns) {
       const lbl = alResto ? 'CONTRAFLOR AL RESTO' : 'CONTRAFLOR';
       const win = alResto ? faltaEnvidoPoints(G.target, G.scores) : 6;
       const rej = alResto ? 6 : 4;
-      addChantState(btns, `${caller.name} canta`, lbl,
-        `Querer: ${win} pts | Rechazar: ${teamLabel(teamOf(pc.callerSeat))} cobra ${rej} pts`);
+      addChantState(btns, tr(`${caller.name} canta`, `${caller.name} calls`), lbl,
+        tr(`Querer: ${win} pts | Rechazar: ${teamLabel(teamOf(pc.callerSeat))} cobra ${rej} pts`, `Accept: ${win} pts | Decline: ${teamLabel(teamOf(pc.callerSeat))} gets ${rej} pts`));
       addBtn(btns, `✓ Quiero (${win}p)`, 'success', () => dispatchRespondFlor('accept'));
       addBtn(btns, `✗ No Quiero (+${rej}p)`, 'danger', () => dispatchRespondFlor('reject'));
     }
@@ -837,7 +838,8 @@ function pumpToasts() {
 
 // Cartel neutro (sin autor), p. ej. el resumen de la mano.
 export function showTrucoCallToast(phrase, hold) {
-  toastQueue.push({ text: phrase, hold });
+  // Los carteles neutros (resumen de mano, flor) pueden venir del servidor.
+  toastQueue.push({ text: trText(phrase), hold });
   pumpToasts();
 }
 
@@ -861,9 +863,9 @@ function renderTurnBanner() {
   let mine = false;
 
   if (G.onlineMode && G.opponentConnected === false) {
-    text = 'Rival desconectado. Esperando que vuelva…';
+    text = tr('Rival desconectado. Esperando que vuelva…', 'Opponent disconnected. Waiting for them to come back…');
   } else if (G.phase === 'collapsing') {
-    text = '⊗ Colapsando…';
+    text = tr('⊗ Colapsando…', '⊗ Collapsing…');
   } else if (G.phase === 'baza_end' || G.phase === 'hand_end') {
     text = '';
   } else if (G.pendingChant) {
@@ -874,20 +876,24 @@ function renderTurnBanner() {
     if (pc.responderSeat === viewer) {
       mine = true;
       text = hotSeat
-        ? `${G.players[viewer].name}: te cantaron ${what}. Respondé.`
-        : `Te cantaron ${what}. Respondé.`;
+        ? tr(`${G.players[viewer].name}: te cantaron ${what}. Respondé.`, `${G.players[viewer].name}: they called ${what}. Answer.`)
+        : tr(`Te cantaron ${what}. Respondé.`, `They called ${what}. Answer.`);
     } else {
-      text = `Esperando la respuesta de ${G.players[pc.responderSeat].name}…`;
+      text = tr(`Esperando la respuesta de ${G.players[pc.responderSeat].name}…`, `Waiting for ${G.players[pc.responderSeat].name} to answer…`);
     }
   } else if (G.aiSeat !== null && G.aiThinking) {
-    text = `${G.players[G.aiSeat].name} está pensando…`;
+    text = tr(`${G.players[G.aiSeat].name} está pensando…`, `${G.players[G.aiSeat].name} is thinking…`);
   } else if (G.activeSeat === viewer && (G.phase === 'play' || G.phase === 'chant')) {
     mine = true;
     const canChant = G.phase === 'chant';
-    const who = hotSeat ? `${G.players[viewer].name}, es tu turno` : 'Es tu turno';
-    text = canChant ? `${who}: cantá o jugá una carta` : `${who}: jugá una carta`;
+    const who = hotSeat
+      ? tr(`${G.players[viewer].name}, es tu turno`, `${G.players[viewer].name}, your turn`)
+      : tr('Es tu turno', 'Your turn');
+    text = canChant
+      ? tr(`${who}: cantá o jugá una carta`, `${who}: call or play a card`)
+      : tr(`${who}: jugá una carta`, `${who}: play a card`);
   } else if (G.players[G.activeSeat]) {
-    text = `Turno de ${G.players[G.activeSeat].name}…`;
+    text = tr(`Turno de ${G.players[G.activeSeat].name}…`, `${G.players[G.activeSeat].name}'s turn…`);
   }
 
   el.textContent = text;
@@ -932,7 +938,7 @@ export function appendChatMessage(name, text, team, mine, announce = true) {
   row.className = 'chat-msg' + (mine ? ' mine' : '');
   const who = document.createElement('span');
   who.className = `chat-who t${team}`;
-  who.textContent = mine ? 'Vos' : name;
+  who.textContent = mine ? tr('Vos', 'You') : name;
   const what = document.createElement('span');
   what.className = 'chat-text';
   what.textContent = text;
@@ -1009,7 +1015,7 @@ export function showEnvidoAnnouncement(res, pts, finalCards) {
 
   // Subtitle with call sequence
   const callStr = G.chant.envido.calls.map(c => c.toUpperCase()).join(' → ');
-  subtitle.textContent = callStr || 'Cartas al descubierto';
+  subtitle.textContent = callStr || tr('Cartas al descubierto', 'Cards revealed');
 
   const cardScale = 0.52;
   const cW = Math.round(130 * cardScale), cH = Math.round(200 * cardScale);
@@ -1064,7 +1070,7 @@ export function showEnvidoAnnouncement(res, pts, finalCards) {
     if (isWinner) {
       const badge = document.createElement('div');
       badge.className = 'envido-winner-badge';
-      badge.textContent = '✦ Gana el envido ✦';
+      badge.textContent = tr('✦ Gana el envido ✦', '✦ Wins the envido ✦');
       block.appendChild(badge);
     }
 
@@ -1073,7 +1079,7 @@ export function showEnvidoAnnouncement(res, pts, finalCards) {
 
   // Points awarded line
   const winnerName = G.players.find(p => teamOf(p.seat) === res.winner)?.name ?? `Eq ${res.winner}`;
-  ptsEl.innerHTML = `<strong>+${pts}</strong> pts para ${winnerName}`;
+  ptsEl.innerHTML = tr(`<strong>+${pts}</strong> pts para ${winnerName}`, `<strong>+${pts}</strong> pts to ${winnerName}`);
 
   // Open overlay
   const overlay = document.getElementById('envido-overlay');
@@ -1109,7 +1115,7 @@ export function showModal(titleCls, title, body, pts, buttons) {
 
   if (pts != null) {
     ptsEl.style.display = '';
-    ptsEl.innerHTML = `<span class="pts-big">${pts}</span> pts en juego`;
+    ptsEl.innerHTML = tr(`<span class="pts-big">${pts}</span> pts en juego`, `<span class="pts-big">${pts}</span> pts at stake`);
   } else {
     ptsEl.style.display = 'none';
   }
@@ -1142,7 +1148,7 @@ export function log(msg, cls = '') {
   const entry = document.createElement('div');
   entry.className = `log-entry${cls ? ' '+cls : ''}`;
   const t = new Date().toLocaleTimeString('es', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-  entry.textContent = `[${t}] ${msg}`;
+  entry.textContent = `[${t}] ${trText(msg)}`;
   panel.appendChild(entry);
   panel.scrollTop = panel.scrollHeight;
 }

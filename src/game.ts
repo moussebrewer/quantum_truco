@@ -3,6 +3,7 @@
 // This file owns game state, rules, flow, and gameplay mutations.
 
 import { flying, arenaKey, flyGhost, makeCardBack, prefersReducedMotion, COLLAPSE_DUR, COLLAPSE_STAGGER } from './anim';
+import { tr, trText } from './i18n';
 
 export const setupCfg = { tableSize:2, target:15, conFlor:false, mode:'human', prepared:false };
 
@@ -524,7 +525,7 @@ function newGame(cfg) {
   for (let seat=0; seat<tableSize; seat++) {
     const hand = deck.deal(3);
     players.push({
-      name: `Jugador ${seat + 1}`,
+      name: tr(`Jugador ${seat + 1}`, `Player ${seat + 1}`),
       seat,
       team: teamOf(seat),
       hand: hand.slice(),  // quantum cards
@@ -585,7 +586,7 @@ export function toggleFlor() {
   if (typeof document === 'undefined') return;
   const btn = document.getElementById('btn-flor');
   if (!btn) return;
-  btn.textContent = florOn ? 'SÍ' : 'NO';
+  btn.textContent = florOn ? tr('SÍ', 'YES') : 'NO';
   btn.classList.toggle('on', florOn);
 }
 
@@ -1163,15 +1164,16 @@ export function goToMazo() {
   }
 
   runtime.showModal('danger',
-    `${p.name} se va al Mazo`,
-    `${rival} cobra <strong>${total} pts</strong>${extra ? ' (1 del truco y 1 por el envido sin cantar)' : ''}.`,
+    tr(`${p.name} se va al Mazo`, `${p.name} folds (al mazo)`),
+    tr(`${rival} cobra <strong>${total} pts</strong>${extra ? ' (1 del truco y 1 por el envido sin cantar)' : ''}.`,
+       `${trText(rival)} gets <strong>${total} pts</strong>${extra ? ' (1 for the truco and 1 for the envido nobody called)' : ''}.`),
     total,
     [
-      { label: 'Confirmar', cls: 'danger', cb: () => {
+      { label: tr('Confirmar', 'Confirm'), cls: 'danger', cb: () => {
           if (runtime.closeModal) runtime.closeModal();
           confirm();
       }},
-      { label: 'Cancelar', cls: 'primary', cb: () => { if (runtime.closeModal) runtime.closeModal(); } },
+      { label: tr('Cancelar', 'Cancel'), cls: 'primary', cb: () => { if (runtime.closeModal) runtime.closeModal(); } },
     ]
   );
 }
@@ -1604,10 +1606,10 @@ export function animateDeal(onDone) {
   overlay.className = 'new-hand-overlay';
   const manoName = G.players[G.manoSeat].name;
   overlay.innerHTML = `
-    <div class="new-hand-label">Mano ${G.handNum}</div>
-    <div class="new-hand-num">Partida a ${G.target} pts · ${G.scores[0]}–${G.scores[1]}</div>
+    <div class="new-hand-label">${tr(`Mano ${G.handNum}`, `Hand ${G.handNum}`)}</div>
+    <div class="new-hand-num">${tr(`Partida a ${G.target} pts`, `Game to ${G.target} pts`)} · ${G.scores[0]}–${G.scores[1]}</div>
     <div class="mano-indicator"></div>`;
-  overlay.querySelector('.mano-indicator').textContent = `✦ Es mano: ${manoName} ✦`;
+  overlay.querySelector('.mano-indicator').textContent = tr(`✦ Es mano: ${manoName} ✦`, `✦ Mano (leads): ${manoName} ✦`);
   document.body.appendChild(overlay);
 
   const mazoEl = document.getElementById('mazo-stack');
@@ -1683,7 +1685,7 @@ function showWin(winnerTeam) {
   G.winnerName = name;
   G.phase = 'match_end';
   if (runtime.showWinScreen) {
-    runtime.showWinScreen(`¡${name.toUpperCase()} GANA!`, 'Partida terminada', `${G.scores[0]} — ${G.scores[1]}`);
+    runtime.showWinScreen(tr(`¡${name.toUpperCase()} GANA!`, `${trText(name).toUpperCase()} WINS!`), tr('Partida terminada', 'Game over'), `${G.scores[0]} — ${G.scores[1]}`);
   }
   if (runtime.showScreen) runtime.showScreen('screen-win');
 }

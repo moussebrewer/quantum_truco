@@ -11,6 +11,7 @@ import {
   animateSweepTrick,
 } from './game';
 import { COLLAPSE_DUR, COLLAPSE_STAGGER } from './anim';
+import { tr, trText, trName } from './i18n';
 import {
   showEnvidoAnnouncement,
   setEnvidoOverlayOnClose,
@@ -90,13 +91,13 @@ function clearSessionStorage() {
 function setStatus(text, cls = '') {
   const el = document.getElementById('online-status');
   if (!el) return;
-  el.textContent = text || '';
+  el.textContent = trText(text || '');
   el.className = `online-status ${cls}`.trim();
 }
 
 function setHeaderStatus(text) {
   const el = document.getElementById('online-header-status');
-  if (el) el.textContent = text || '';
+  if (el) el.textContent = trText(text || '');
 }
 
 function syncLeaveButton(show) {
@@ -122,7 +123,7 @@ function restoreSession() {
     session.seat = saved.seat;
     setupCfg.mode = 'online_1v1';
     updateSelectedMode();
-    setStatus(`Reconectando a la sala ${session.roomCode}…`, 'warn');
+    setStatus(tr(`Reconectando a la sala ${session.roomCode}…`, `Reconnecting to room ${session.roomCode}…`), 'warn');
     connectSocket();
     return true;
   } catch {
@@ -184,7 +185,7 @@ function flushSaysAndLog(next, silent) {
   if (!silent) {
     for (const s of says) {
       if (s.n > lastSayN) {
-        const name = s.seat === session.seat ? 'Vos' : (next.players?.[s.seat]?.name || 'Rival');
+        const name = s.seat === session.seat ? tr('Vos', 'You') : (next.players?.[s.seat]?.name || tr('Rival', 'Opponent'));
         showSay(name, s.text, s.seat % 2);
       }
     }
@@ -221,6 +222,8 @@ async function drainStateQueue() {
 
 async function presentEnvelope(envelope) {
   const next = envelope.state;
+  // Los nombres que arma el servidor ("Jugador 2") van en el idioma elegido.
+  next.players?.forEach(p => { p.name = trName(p.name); });
   const prev = G && G.onlineMode ? G : null;
   const seq = next.eventSeq || 0;
   const isNewGame = lastSeq === null || !prev || seq < lastSeq;
@@ -315,7 +318,7 @@ async function presentHandEnd(hand) {
   }
   const four = (G?.players?.length || 2) > 2;
   const names = four
-    ? ['Equipo A', 'Equipo B']
+    ? [tr('Equipo A', 'Team A'), tr('Equipo B', 'Team B')]
     : [G?.players?.[0]?.name || 'Jugador 1', G?.players?.[1]?.name || 'Jugador 2'];
   const title = hand.duel ? `Pica-pica (mano ${hand.handNum})` : `Mano ${hand.handNum}`;
   showTrucoCallToast(`${title} · ${names[0]} +${hand.handScore[0]} · ${names[1]} +${hand.handScore[1]}`, 2200);
@@ -334,13 +337,13 @@ function applyEnvelope(envelope) {
   state.opponentConnected = envelope.opponentConnected;
   state.roomReady = envelope.roomReady;
   installOnlineState(state);
-  setHeaderStatus(envelope.statusText || 'En línea');
+  setHeaderStatus(envelope.statusText || tr('En línea', 'Online'));
   syncLeaveButton(true);
 
   if (state.matchEnded) {
     const winnerTeam = state.winnerTeam ?? 0;
-    const winnerName = state.winnerName || (winnerTeam === 0 ? state.players?.[0]?.name : state.players?.[1]?.name) || 'Ganador';
-    showWinState(`¡${String(winnerName).toUpperCase()} GANA!`, 'Partida online terminada', `${state.scores[0]} — ${state.scores[1]}`);
+    const winnerName = state.winnerName || (winnerTeam === 0 ? state.players?.[0]?.name : state.players?.[1]?.name) || tr('Ganador', 'Winner');
+    showWinState(tr(`¡${trText(String(winnerName)).toUpperCase()} GANA!`, `${trText(String(winnerName)).toUpperCase()} WINS!`), tr('Partida online terminada', 'Online game over'), `${state.scores[0]} — ${state.scores[1]}`);
     showScreenById('screen-win');
   } else {
     showScreenById('screen-game');
@@ -353,8 +356,8 @@ function handleMessage(payload) {
 
   if (payload.type === 'room_waiting') {
     setupCfg.mode = 'online_1v1';
-    setStatus(payload.statusText || `Sala ${payload.roomCode}: esperando rival…`, 'warn');
-    setHeaderStatus(`Sala ${payload.roomCode}`);
+    setStatus(payload.statusText || tr(`Sala ${payload.roomCode}: esperando rival…`, `Room ${payload.roomCode}: waiting for opponent…`), 'warn');
+    setHeaderStatus(tr(`Sala ${payload.roomCode}`, `Room ${payload.roomCode}`));
     syncLeaveButton(false);
     showScreenById('screen-setup');
     return;
@@ -373,19 +376,19 @@ function handleMessage(payload) {
   }
 
   if (payload.type === 'action_rejected') {
-    setStatus(payload.error || 'Acción rechazada.', 'err');
-    setHeaderStatus(payload.error || 'Acción rechazada');
+    setStatus(payload.error || tr('Acción rechazada.', 'Action rejected.'), 'err');
+    setHeaderStatus(payload.error || tr('Acción rechazada', 'Action rejected'));
     return;
   }
 
   if (payload.type === 'rematch_waiting') {
-    setStatus(payload.statusText || 'Esperando revancha…', 'warn');
-    setHeaderStatus(payload.statusText || 'Esperando revancha');
+    setStatus(payload.statusText || tr('Esperando revancha…', 'Waiting for the rematch…'), 'warn');
+    setHeaderStatus(payload.statusText || tr('Esperando revancha', 'Waiting for the rematch'));
     return;
   }
 
   if (payload.type === 'room_closed') {
-    setStatus(payload.statusText || 'La sala se cerró.', 'err');
+    setStatus(payload.statusText || tr('La sala se cerró.', 'The room was closed.'), 'err');
     leaveOnlineRoom(false);
     return;
   }
@@ -410,12 +413,12 @@ function connectSocket() {
 
   const sock = new WebSocket(wsUrl(session.roomId, session.token));
   session.socket = sock;
-  setStatus(`Conectando a la sala ${session.roomCode}…`, 'warn');
+  setStatus(tr(`Conectando a la sala ${session.roomCode}…`, `Connecting to room ${session.roomCode}…`), 'warn');
 
   sock.addEventListener('open', () => {
     session.connected = true;
-    setStatus(`Conectado a la sala ${session.roomCode}.`, 'ok');
-    setHeaderStatus(`Sala ${session.roomCode}`);
+    setStatus(tr(`Conectado a la sala ${session.roomCode}.`, `Connected to room ${session.roomCode}.`), 'ok');
+    setHeaderStatus(tr(`Sala ${session.roomCode}`, `Room ${session.roomCode}`));
     persistSession();
   });
 
@@ -430,8 +433,8 @@ function connectSocket() {
   const onDisconnect = () => {
     session.connected = false;
     if (!session.roomId) return;
-    setStatus(`Conexión perdida con la sala ${session.roomCode}. Reintentando…`, 'warn');
-    setHeaderStatus('Reconectando…');
+    setStatus(tr(`Conexión perdida con la sala ${session.roomCode}. Reintentando…`, `Lost connection to room ${session.roomCode}. Retrying…`), 'warn');
+    setHeaderStatus(tr('Reconectando…', 'Reconnecting…'));
     scheduleReconnect();
   };
 
@@ -441,7 +444,7 @@ function connectSocket() {
 
 function sendAction(message) {
   if (!session.socket || session.socket.readyState !== WebSocket.OPEN) {
-    setStatus('No hay conexión activa con la sala.', 'err');
+    setStatus(tr('No hay conexión activa con la sala.', 'There is no active connection to the room.'), 'err');
     return;
   }
   session.socket.send(JSON.stringify(message));
@@ -495,11 +498,12 @@ export async function createOnlineRoomFromUI() {
     const input = document.getElementById('room-code-input');
     if (input) input.value = data.roomCode;
     setStatus(data.tableSize > 2
-      ? `Sala ${data.roomCode} creada para ${data.tableSize}. Compartí el código: los equipos se arman por orden de llegada, intercalados (${data.tableSize === 6 ? '1º, 3º y 5º contra 2º, 4º y 6º' : '1º y 3º contra 2º y 4º'}).`
-      : `Sala ${data.roomCode} creada. Compartí el código y esperá al rival.`, 'ok');
+      ? tr(`Sala ${data.roomCode} creada para ${data.tableSize}. Compartí el código: los equipos se arman por orden de llegada, intercalados (${data.tableSize === 6 ? '1º, 3º y 5º contra 2º, 4º y 6º' : '1º y 3º contra 2º y 4º'}).`,
+           `Room ${data.roomCode} created for ${data.tableSize}. Share the code: teams are formed in order of arrival, alternating (${data.tableSize === 6 ? '1st, 3rd and 5th vs 2nd, 4th and 6th' : '1st and 3rd vs 2nd and 4th'}).`)
+      : tr(`Sala ${data.roomCode} creada. Compartí el código y esperá al rival.`, `Room ${data.roomCode} created. Share the code and wait for your opponent.`), 'ok');
     connectSocket();
   } catch (err) {
-    setStatus(err?.message || 'No se pudo crear la sala.', 'err');
+    setStatus(err?.message || tr('No se pudo crear la sala.', 'Could not create the room.'), 'err');
   }
 }
 
@@ -508,7 +512,7 @@ export async function joinOnlineRoomFromUI() {
   const input = document.getElementById('room-code-input');
   const roomCode = String(input?.value || '').trim().toUpperCase();
   if (!roomCode) {
-    setStatus('Ingresá un código de sala.', 'err');
+    setStatus(tr('Ingresá un código de sala.', 'Enter a room code.'), 'err');
     return;
   }
   try {
@@ -521,10 +525,10 @@ export async function joinOnlineRoomFromUI() {
     session.seat = data.seat;
     session.pendingRematch = false;
     persistSession();
-    setStatus(`Te uniste a la sala ${data.roomCode}.`, 'ok');
+    setStatus(tr(`Te uniste a la sala ${data.roomCode}.`, `You joined room ${data.roomCode}.`), 'ok');
     connectSocket();
   } catch (err) {
-    setStatus(err?.message || 'No se pudo entrar a la sala.', 'err');
+    setStatus(err?.message || tr('No se pudo entrar a la sala.', 'Could not join the room.'), 'err');
   }
 }
 
@@ -548,14 +552,14 @@ export function leaveOnlineRoom(sendLeave = true) {
   clearSessionStorage();
   setHeaderStatus('');
   syncLeaveButton(false);
-  setStatus('Fuera de la sala.', '');
+  setStatus(tr('Fuera de la sala.', 'You left the room.'), '');
   showScreenById('screen-setup');
 }
 
 export function requestOnlineRematch() {
   if (!isOnlineClientMode()) return;
   session.pendingRematch = true;
-  setStatus('Pediste revancha. Esperando al rival…', 'warn');
+  setStatus(tr('Pediste revancha. Esperando al rival…', 'You asked for a rematch. Waiting for your opponent…'), 'warn');
   sendAction({ type: 'request_rematch' });
 }
 
