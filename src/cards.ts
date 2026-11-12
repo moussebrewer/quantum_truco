@@ -248,15 +248,31 @@ function halfContent(num, palo, side) {
     ${suitIcon(palo, isFig ? W - 26 : W - 30, isFig ? H - 84 : H - 88, isFig ? 42 : 50)}`;
 }
 
-export function buildEntangled(numA, paloA, numB, paloB, flip) {
+// Cartel con la chance de una mitad (solo en el modo de estados preparados).
+function probBadge(p, x, y) {
+  const pct = Math.round(p * 100);
+  const color = pct > 50 ? "#ffd76a" : pct < 50 ? "#b9c4d6" : "#ffffff";
+  return `<rect x="${x}" y="${y}" width="36" height="17" rx="5" fill="#0a0f1e" opacity="0.88"/>
+    <text x="${x + 18}" y="${y + 13}" text-anchor="middle" font-family="${INDEX_FONT}" font-size="13" font-weight="700" fill="${color}">${pct}%</text>`;
+}
+
+// pA (opcional): chance de que la carta termine siendo su primera opción.
+// Si se pasa, cada mitad muestra su porcentaje.
+export function buildEntangled(numA, paloA, numB, paloB, flip, pA) {
   // flip intercambia qué opción va arriba a la izquierda.
   const top = flip ? { num: numB, palo: paloB } : { num: numA, palo: paloA };
   const bot = flip ? { num: numA, palo: paloA } : { num: numB, palo: paloB };
   const pT = PALOS[top.palo], pB = PALOS[bot.palo];
   const uid = nextUid();
+  const hasProb = typeof pA === 'number';
+  const pTop = hasProb ? (flip ? 1 - pA : pA) : 0.5;
+  const badges = hasProb ? probBadge(pTop, 6, 112) + probBadge(1 - pTop, W - 42, H - 129) : '';
+  const aria = hasProb
+    ? `${top.num} de ${pT.label} (${Math.round(pTop * 100)}%) o ${bot.num} de ${pB.label} (${Math.round((1 - pTop) * 100)}%)`
+    : `${top.num} de ${pT.label} o ${bot.num} de ${pB.label}`;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img"
-    aria-label="${top.num} de ${pT.label} o ${bot.num} de ${pB.label}">
+    aria-label="${aria}">
   <defs>
     <clipPath id="card_${uid}"><rect width="${W}" height="${H}" rx="${R}"/></clipPath>
     <clipPath id="a_${uid}"><path d="M0,0 L${W},0 L0,${H} Z"/></clipPath>
@@ -286,6 +302,7 @@ export function buildEntangled(numA, paloA, numB, paloB, flip) {
     <circle cx="${W / 2}" cy="${H / 2}" r="9.5" fill="#0a0f1e" stroke="url(#seam_${uid})" stroke-width="1.6"/>
     <path d="M${W / 2 - 4.2},${H / 2 - 4.2} L${W / 2 + 4.2},${H / 2 + 4.2} M${W / 2 + 4.2},${H / 2 - 4.2} L${W / 2 - 4.2},${H / 2 + 4.2}"
       stroke="#7fd8ff" stroke-width="1.5" stroke-linecap="round"/>
+    ${badges}
   </g>
   <rect x="1" y="1" width="${W - 2}" height="${H - 2}" rx="${R - 1}" fill="none" stroke="#0a0f1e" stroke-width="1.8" opacity="0.75"/>
   </svg>`;

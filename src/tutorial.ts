@@ -113,6 +113,14 @@ const QUANTUM = [
       <p>Si al final te sale, cobrás <b>3 puntos</b>. Si la cantaste y no salió, los 3 son <b>para el rival</b>.</p>`,
   },
   {
+    title: 'Modo opcional: estados preparados',
+    art: `<div class="tut-row">${col(`<div class="qcard tut-card tut-quantum" style="--card-w:92px">${buildEntangled(1, 'espada', 4, 'copa', false, 0.7)}</div>`, 'esta carta')}<div class="tut-link">⊗</div>${col(`<div class="qcard tut-card tut-quantum" style="--card-w:92px">${buildEntangled(1, 'espada', 4, 'copa', false, 0.3)}</div>`, 'su gemela')}</div>`,
+    body: `
+      <p>Si lo activás en el menú, las dos opciones de cada carta <b>dejan de ser mitad y mitad</b>. Cada par se prepara al azar entre 25% y 75%, de a 5.</p>
+      <p>Cada mitad muestra su chance. Las gemelas son <b>complementarias</b>: si una tiene 70% de ser el 1 de espadas, la otra tiene 30%.</p>
+      <p>El envido promedio y la chance de flor ya tienen en cuenta esos porcentajes.</p>`,
+  },
+  {
     title: 'Lo demás es truco de siempre',
     art: `<div class="tut-row wrap">${chip('Truco · Retruco · Vale cuatro', 'gold')}${chip('El envido está primero', 'green')}${chip('Irse al mazo', 'red')}${chip('De a 2, 4 o 6')}</div>`,
     body: `

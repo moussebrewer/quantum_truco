@@ -4,7 +4,7 @@
 
 import { flying, arenaKey, flyGhost, makeCardBack, prefersReducedMotion, COLLAPSE_DUR, COLLAPSE_STAGGER } from './anim';
 
-export const setupCfg = { tableSize:2, target:15, conFlor:false, mode:'human' };
+export const setupCfg = { tableSize:2, target:15, conFlor:false, mode:'human', prepared:false };
 
 // Asiento de quien está mirando la pantalla (para orientar animaciones).
 function viewerSeatForAnim() {
@@ -165,22 +165,38 @@ export function trucoPower(c) {
 // Motor cuántico
 // ─────────────────────────────────────────────────────────────
 
+// Modo "estados preparados": cada par entrelazado puede no ser mitad y
+// mitad. Al armar el mazo se sortea su preparación entre 25% y 75%, de a 5.
+const PREPARED_STEPS = [0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75];
+
 class QuantumDeck {
-  constructor(seed) {
+  constructor(seed, prepared = false) {
     this._rng = seededRng(seed);
     const base = trucoDeck40();
     shuffleArr(base, this._rng);
     this.pairs = {};   // pairId -> [cardA, cardB]
     this.pairBit = {}; // pairId -> null | 0 | 1
     this.cards = [];   // QuantumCard objects
+    // Solo en modo preparado: pairId -> probabilidad de que el par mida 0.
+    this.pairP0 = prepared ? {} : null;
 
     let pid = 0;
     for (let i = 0; i < base.length; i += 2) {
       const a = base[i], b = base[i+1];
       this.pairs[pid] = [a, b];
       this.pairBit[pid] = null;
-      this.cards.push({pairId:pid, idxInPair:0, options:[a,b], collapsedTo:null});
-      this.cards.push({pairId:pid, idxInPair:1, options:[a,b], collapsedTo:null});
+      const c0 = {pairId:pid, idxInPair:0, options:[a,b], collapsedTo:null};
+      const c1 = {pairId:pid, idxInPair:1, options:[a,b], collapsedTo:null};
+      if (prepared) {
+        const p0 = PREPARED_STEPS[Math.floor(this._rng() * PREPARED_STEPS.length)];
+        this.pairP0[pid] = p0;
+        // probA: chance de que ESTA carta termine siendo options[0].
+        // Las gemelas son complementarias: una p0 y la otra 1 − p0.
+        c0.probA = p0;
+        c1.probA = Math.round((1 - p0) * 100) / 100;
+      }
+      this.cards.push(c0);
+      this.cards.push(c1);
       pid++;
     }
     shuffleArr(this.cards, this._rng);
@@ -193,7 +209,10 @@ class QuantumDeck {
 
   measurePair(pairId) {
     if (this.pairBit[pairId] === null) {
-      this.pairBit[pairId] = Math.floor(this._rng() * 2);
+      const p0 = this.pairP0 ? this.pairP0[pairId] : undefined;
+      this.pairBit[pairId] = (p0 === undefined)
+        ? Math.floor(this._rng() * 2)
+        : (this._rng() < p0 ? 0 : 1);
     }
     return this.pairBit[pairId];
   }
@@ -226,21 +245,56 @@ export function enumerateWorlds(hand) {
   return worlds;
 }
 
+// Chance de que una carta termine siendo su primera opción (0.5 salvo en
+// el modo de estados preparados).
+export function cardProbA(qc) {
+  return typeof qc?.probA === 'number' ? qc.probA : 0.5;
+}
+
+// Peso de cada mundo de enumerateWorlds(hand), en el mismo orden. Con
+// cartas mitad y mitad todos pesan lo mismo.
+function worldWeights(hand) {
+  const pairIds = [...new Set(hand.map(q=>q.pairId))].sort();
+  // P(par mide 0), vista desde cualquiera de sus cartas en la mano.
+  const p0 = {};
+  for (const pid of pairIds) {
+    const qc = hand.find(q => q.pairId === pid);
+    const pa = cardProbA(qc);
+    p0[pid] = qc.idxInPair === 1 ? 1 - pa : pa;
+  }
+  const total = 1 << pairIds.length;
+  const weights = [];
+  for (let mask = 0; mask < total; mask++) {
+    let w = 1;
+    pairIds.forEach((pid, i) => { w *= ((mask >> i) & 1) ? 1 - p0[pid] : p0[pid]; });
+    weights.push(w);
+  }
+  return weights;
+}
+
 export function envidoMetric(hand) {
   const worlds = enumerateWorlds(hand);
+  const weights = worldWeights(hand);
   const scores = worlds.map(w=>envidoScore(w));
-  const mu = scores.reduce((a,b)=>a+b,0)/scores.length;
-  const p28 = scores.filter(x=>x>=28).length/scores.length;
+  let mu = 0, p28 = 0;
+  scores.forEach((s, i) => { mu += s * weights[i]; if (s >= 28) p28 += weights[i]; });
   return {mu, p28, min:Math.min(...scores), max:Math.max(...scores)};
 }
 
 export function florMetric(hand) {
   const worlds = enumerateWorlds(hand);
-  const florWorlds = worlds.filter(w=>hasFlor(w));
-  const pFlor = florWorlds.length/worlds.length;
-  if (florWorlds.length===0) return {mu:0, pFlor:0, min:-1, max:-1};
-  const vals = florWorlds.map(w=>florScore(w));
-  return {mu:vals.reduce((a,b)=>a+b,0)/vals.length, pFlor, min:Math.min(...vals), max:Math.max(...vals)};
+  const weights = worldWeights(hand);
+  let pFlor = 0, sum = 0;
+  const vals = [];
+  worlds.forEach((w, i) => {
+    if (!hasFlor(w)) return;
+    const v = florScore(w);
+    vals.push(v);
+    pFlor += weights[i];
+    sum += v * weights[i];
+  });
+  if (vals.length===0) return {mu:0, pFlor:0, min:-1, max:-1};
+  return {mu: sum / pFlor, pFlor, min:Math.min(...vals), max:Math.max(...vals)};
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -464,7 +518,7 @@ function newGame(cfg) {
   const tableSize = cfg.tableSize;
   const target = cfg.target;
   const conFlor = cfg.conFlor;
-  const deck = new QuantumDeck(null);
+  const deck = new QuantumDeck(null, !!cfg.prepared);
 
   const players = [];
   for (let seat=0; seat<tableSize; seat++) {
@@ -484,6 +538,7 @@ function newGame(cfg) {
     tableSize,
     target,
     conFlor,
+    prepared: !!cfg.prepared,
     deck,
     players,
     scores: [0,0],
@@ -1151,7 +1206,7 @@ function resolveTrick() {
       winnerTeam: winner.team,
       plays: G.playOrder.filter(s => G.playsThisTrick[s]).map(s => {
         const qc = G.playsThisTrick[s];
-        return { seat: s, pairId: qc.pairId, idxInPair: qc.idxInPair, options: qc.options, card: qc.collapsedTo };
+        return { seat: s, pairId: qc.pairId, idxInPair: qc.idxInPair, options: qc.options, probA: qc.probA, card: qc.collapsedTo };
       }),
     };
 
@@ -1497,7 +1552,7 @@ function dealNewHand() {
   G.handNum++;
   G.manoSeat = (G.manoSeat + 1) % G.tableSize;
 
-  const deck = new QuantumDeck(null);
+  const deck = new QuantumDeck(null, !!G.prepared);
   G.deck = deck;
   G.players.forEach((p, seat) => {
     const hand = deck.deal(3);

@@ -284,6 +284,7 @@ export default {
           roomCode: code,
           target: body.target || 15,
           conFlor: !!body.conFlor,
+          prepared: !!body.prepared,
           tableSize: [2, 4, 6].includes(body.tableSize) ? body.tableSize : 2,
         }),
       });
@@ -467,6 +468,7 @@ export class RoomDurableObject {
         tableSize,
         target: body.target || 15,
         conFlor: !!body.conFlor,
+        prepared: !!body.prepared,
         mode: 'online_1v1',
       };
       this.meta.players = Array.from({ length: tableSize }, emptyPlayer);

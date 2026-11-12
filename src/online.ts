@@ -16,6 +16,7 @@ import {
   setEnvidoOverlayOnClose,
   showTrucoCallToast,
   showSay,
+  selectPlayMode,
   log,
   clearLog,
   setChatEnabled,
@@ -106,9 +107,7 @@ function syncLeaveButton(show) {
 }
 
 function updateSelectedMode() {
-  document.querySelectorAll('.opt-btn[data-group="mode"]').forEach(b => b.classList.remove('selected'));
-  const online = document.querySelector('.opt-btn[data-group="mode"][data-val="online_1v1"]');
-  if (online) online.classList.add('selected');
+  selectPlayMode('online');
 }
 
 function restoreSession() {
@@ -279,7 +278,7 @@ async function presentTrick(prev, trick) {
   view.phase = 'collapsing';
   view.playsThisTrick = {};
   for (const p of trick.plays) {
-    view.playsThisTrick[p.seat] = { pairId: p.pairId, idxInPair: p.idxInPair, options: p.options, collapsedTo: null };
+    view.playsThisTrick[p.seat] = { pairId: p.pairId, idxInPair: p.idxInPair, options: p.options, probA: p.probA, collapsedTo: null };
     const player = view.players[p.seat];
     if (p.seat === session.seat) {
       player.hand = player.hand.filter(q => !(q.pairId === p.pairId && q.idxInPair === p.idxInPair));
@@ -484,6 +483,7 @@ export async function createOnlineRoomFromUI() {
     const data = await postJson('/api/rooms/create', {
       target: setupCfg.target,
       conFlor: !!setupCfg.conFlor,
+      prepared: !!setupCfg.prepared,
       tableSize: [2, 4, 6].includes(setupCfg.tableSize) ? setupCfg.tableSize : 2,
     });
     session.roomId = data.roomId;

@@ -109,37 +109,46 @@ export function setEnvidoOverlayOnClose(cb) {
   if (overlay) overlay._onClose = cb;
 }
 
+// ── Menú ─────────────────────────────────────────────────────
+// Primero se elige contra quién (máquina / este dispositivo / online) y
+// eso decide qué paso 2 se muestra: el rival o la cantidad de jugadores.
+let aiLevel = 'ai_medium';
+
+function playOf(mode) {
+  if (mode === 'online_1v1') return 'online';
+  if (mode === 'human') return 'local';
+  return 'ai';
+}
+
+function selectedPlayers() {
+  const btn = document.querySelector('.opt-btn[data-group="players"].selected');
+  return btn ? parseInt(btn.dataset.val, 10) : 2;
+}
+
+function updateSetupModeUi(mode) {
+  const play = playOf(mode);
+  const show = (id, on) => { const el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; };
+  document.querySelectorAll('.play-btn').forEach(b => b.classList.toggle('selected', b.dataset.play === play));
+  show('step-level', play === 'ai');
+  show('step-players', play !== 'ai');
+  show('online-room-panel', play === 'online');
+  show('btn-start-game', play !== 'online');
+  // Contra la máquina siempre es mano a mano; si no, lo que esté elegido.
+  setupCfg.tableSize = play === 'ai' ? 2 : selectedPlayers();
+}
+
+// Elige "contra quién" desde afuera (p. ej. al reconectarse a una sala).
+export function selectPlayMode(play) {
+  setupCfg.mode = play === 'online' ? 'online_1v1' : play === 'local' ? 'human' : aiLevel;
+  updateSetupModeUi(setupCfg.mode);
+}
+
 export function initSetupOptions() {
-  const updateSetupModeUi = (mode) => {
-    const players = document.getElementById('opts-players');
-    const onlinePanel = document.getElementById('online-room-panel');
-    const onlineDivider = document.getElementById('online-divider');
-    const startBtn = document.getElementById('btn-start-game');
-    const isOnline = mode === 'online_1v1';
-    // Contra la IA siempre es mano a mano; entre personas (en la misma
-    // pantalla u online) puede ser de a 2 o de a 4.
-    const forceTwo = !isOnline && mode !== 'human';
+  document.querySelectorAll('.play-btn').forEach(btn => {
+    btn.addEventListener('click', () => selectPlayMode(btn.dataset.play));
+  });
 
-    if (forceTwo) {
-      document.querySelectorAll('.opt-btn[data-group="players"]').forEach(b => b.classList.remove('selected'));
-      const twoPlayers = document.querySelector('.opt-btn[data-group="players"][data-val="2"]');
-      if (twoPlayers) twoPlayers.classList.add('selected');
-      setupCfg.tableSize = 2;
-      if (players) {
-        players.style.opacity = '0.35';
-        players.style.pointerEvents = 'none';
-      }
-    } else if (players) {
-      players.style.opacity = '';
-      players.style.pointerEvents = '';
-    }
-
-    if (onlinePanel) onlinePanel.style.display = isOnline ? 'block' : 'none';
-    if (onlineDivider) onlineDivider.style.display = isOnline ? 'block' : 'none';
-    if (startBtn) startBtn.style.display = isOnline ? 'none' : '';
-  };
-
-  document.querySelectorAll('.opt-btn').forEach(btn => {
+  document.querySelectorAll('.opt-btn[data-group]').forEach(btn => {
     btn.addEventListener('click', () => {
       const group = btn.dataset.group;
       document.querySelectorAll(`.opt-btn[data-group="${group}"]`).forEach(b => b.classList.remove('selected'));
@@ -147,13 +156,15 @@ export function initSetupOptions() {
       if (group === 'players') setupCfg.tableSize = parseInt(btn.dataset.val, 10);
       if (group === 'target')  setupCfg.target    = parseInt(btn.dataset.val, 10);
       if (group === 'mode') {
-        setupCfg.mode = btn.dataset.val;
+        aiLevel = btn.dataset.val;
+        setupCfg.mode = aiLevel;
         updateSetupModeUi(setupCfg.mode);
       }
     });
   });
 
-  updateSetupModeUi(setupCfg.mode);
+  // Arranca en "contra la máquina", que es lo más fácil para empezar.
+  selectPlayMode('ai');
 }
 
 
@@ -319,7 +330,7 @@ function collapseLayers(qc, id, startAt, now) {
   const delay = Math.round(startAt - now);
   return `<div class="collapse-layers" style="--cdelay:${delay}ms">
       <div class="layer-collapsed">${buildCardSVG(c.rank, c.suit, id)}</div>
-      <div class="layer-entangled">${buildEntangled(a.rank, a.suit, b.rank, b.suit, false)}</div>
+      <div class="layer-entangled">${buildEntangled(a.rank, a.suit, b.rank, b.suit, false, qc.probA)}</div>
     </div>`;
 }
 
@@ -378,7 +389,7 @@ export function renderArena() {
       card.innerHTML = buildCardSVG(c.rank, c.suit, `ct_${seat}_${c.rank}_${c.suit}`);
     } else if (hasOptions) {
       const [a, b] = qc.options;
-      card.innerHTML = buildEntangled(a.rank, a.suit, b.rank, b.suit, false);
+      card.innerHTML = buildEntangled(a.rank, a.suit, b.rank, b.suit, false, qc.probA);
       card.classList.add('quantum');
     }
     slot.appendChild(card);
@@ -508,7 +519,7 @@ export function renderHand() {
         `hc_${qc.pairId}_${i}_${Math.random().toString(36).slice(2,4)}`);
     } else if (hasOptions) {
       const [a, b] = qc.options;
-      wrap.innerHTML = buildEntangled(a.rank, a.suit, b.rank, b.suit, false);
+      wrap.innerHTML = buildEntangled(a.rank, a.suit, b.rank, b.suit, false, qc.probA);
     } else {
       wrap.innerHTML = '<div class="hidden-card-placeholder"></div>';
     }

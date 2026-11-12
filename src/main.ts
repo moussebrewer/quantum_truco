@@ -65,57 +65,87 @@ const APP_HTML = `<!-- ═══════════════════
 <!-- ══════════════════════════════════════════════════════════ -->
 <div id="screen-setup" class="screen active">
   <h1 class="setup-title">QUANTUM ⊗ TRUCO</h1>
+  <p class="setup-tagline">Truco argentino con cartas cuánticas: cada carta es dos a la vez hasta que se juega.</p>
   <div class="setup-card">
-    <div class="setup-row">
-      <span class="setup-label">Modo</span>
+
+    <!-- 1. Contra quién -->
+    <div class="setup-step">
+      <div class="setup-q"><span class="setup-n">1</span>¿Contra quién jugás?</div>
+      <div class="play-options" id="opts-play">
+        <button class="play-btn selected" data-play="ai">
+          <span class="play-ico">🤖</span>
+          <span class="play-txt"><span class="play-name">Contra la máquina</span><span class="play-desc">Vos solo, sin conexión</span></span>
+        </button>
+        <button class="play-btn" data-play="local">
+          <span class="play-ico">👥</span>
+          <span class="play-txt"><span class="play-name">En este dispositivo</span><span class="play-desc">Se lo pasan entre todos</span></span>
+        </button>
+        <button class="play-btn" data-play="online">
+          <span class="play-ico">🌐</span>
+          <span class="play-txt"><span class="play-name">Online</span><span class="play-desc">Cada uno desde el suyo, con un código</span></span>
+        </button>
+      </div>
+    </div>
+
+    <!-- 2a. Rival (solo contra la máquina) -->
+    <div class="setup-step" id="step-level">
+      <div class="setup-q"><span class="setup-n">2</span>Elegí tu rival</div>
       <div class="setup-options" id="opts-mode">
-        <button class="opt-btn selected" data-group="mode" data-val="human">👥 Humanos</button>
-        <button class="opt-btn" data-group="mode" data-val="online_1v1">🌐 Online</button>
-        <button class="opt-btn" data-group="mode" data-val="ai_medium">🃏 El Pibe</button>
-        <button class="opt-btn" data-group="mode" data-val="ai_hard">🎩 Citadino</button>
-        <button class="opt-btn" data-group="mode" data-val="ai_expert">🧉 Gaucho Digital</button>
-        <button class="opt-btn" data-group="mode" data-val="ai_legend">🃑 El Duende</button>
+        <button class="opt-btn level-btn selected" data-group="mode" data-val="ai_medium"><span>🃏 El Pibe</span><span class="lvl-tag">Fácil</span></button>
+        <button class="opt-btn level-btn" data-group="mode" data-val="ai_hard"><span>🎩 Citadino</span><span class="lvl-tag">Medio</span></button>
+        <button class="opt-btn level-btn" data-group="mode" data-val="ai_expert"><span>🧉 Gaucho Digital</span><span class="lvl-tag">Difícil</span></button>
+        <button class="opt-btn level-btn" data-group="mode" data-val="ai_legend"><span>🃑 El Duende</span><span class="lvl-tag">Experto</span></button>
       </div>
     </div>
-    <div class="setup-divider"></div>
-    <div class="setup-row">
-      <span class="setup-label">Jugadores</span>
-      <div class="setup-options" id="opts-players">
-        <button class="opt-btn selected" data-group="players" data-val="2">2</button>
-        <button class="opt-btn" data-group="players" data-val="4">4</button>
-        <button class="opt-btn" data-group="players" data-val="6">6</button>
+
+    <!-- 2b. Cuántos (en este dispositivo u online) -->
+    <div class="setup-step" id="step-players" style="display:none">
+      <div class="setup-q"><span class="setup-n">2</span>¿Cuántos juegan?</div>
+      <div class="setup-options players-options" id="opts-players">
+        <button class="opt-btn level-btn selected" data-group="players" data-val="2"><span>2</span><span class="lvl-tag">Mano a mano</span></button>
+        <button class="opt-btn level-btn" data-group="players" data-val="4"><span>4</span><span class="lvl-tag">Dos parejas</span></button>
+        <button class="opt-btn level-btn" data-group="players" data-val="6"><span>6</span><span class="lvl-tag">Dos tríos</span></button>
       </div>
     </div>
-    <div class="setup-divider"></div>
-    <div class="setup-row">
-      <span class="setup-label">Puntaje</span>
-      <div class="setup-options" id="opts-target">
-        <button class="opt-btn selected" data-group="target" data-val="15">15 pts</button>
-        <button class="opt-btn" data-group="target" data-val="30">30 pts</button>
+
+    <!-- 3. Reglas -->
+    <div class="setup-step">
+      <div class="setup-q"><span class="setup-n">3</span>Reglas de la partida</div>
+      <div class="setup-row">
+        <span class="setup-label">Puntaje<small>Hasta cuánto se juega</small></span>
+        <div class="setup-options" id="opts-target">
+          <button class="opt-btn selected" data-group="target" data-val="15">15 pts</button>
+          <button class="opt-btn" data-group="target" data-val="30">30 pts</button>
+        </div>
+      </div>
+      <div class="setup-row">
+        <span class="setup-label">Flor<small>Tres del mismo palo valen puntos</small></span>
+        <button class="toggle-btn" id="btn-flor" onclick="toggleFlor()">NO</button>
+      </div>
+      <div class="setup-row">
+        <span class="setup-label">Estados preparados<small>Las dos opciones de cada carta dejan de ser mitad y mitad: van de 25% a 75%</small></span>
+        <button class="toggle-btn" id="btn-prepared" onclick="togglePrepared()">NO</button>
       </div>
     </div>
-    <div class="setup-divider"></div>
-    <div class="setup-row">
-      <span class="setup-label">Con Flor</span>
-      <button class="toggle-btn" id="btn-flor" onclick="toggleFlor()">NO</button>
-    </div>
-    <div class="setup-divider" id="online-divider" style="display:none"></div>
+
+    <!-- Online: crear o unirse -->
     <div class="online-room-panel" id="online-room-panel" style="display:none">
       <div class="setup-row">
-        <span class="setup-label">Crear</span>
+        <span class="setup-label">Sala nueva<small>Te da un código para compartir</small></span>
         <div class="online-room-actions">
           <button class="opt-btn online-room-btn" onclick="createOnlineRoom()">Crear sala</button>
         </div>
       </div>
       <div class="setup-row">
-        <span class="setup-label">Unirme</span>
+        <span class="setup-label">Unirme<small>Con el código que te pasaron</small></span>
         <div class="online-join-controls">
-          <input id="room-code-input" class="online-room-input" maxlength="8" placeholder="Código de sala" />
+          <input id="room-code-input" class="online-room-input" maxlength="8" placeholder="Código" />
           <button class="opt-btn online-room-btn" onclick="joinOnlineRoom()">Entrar</button>
         </div>
       </div>
-      <div class="online-status" id="online-status">Elegí crear una sala o ingresá un código para unirte.</div>
+      <div class="online-status" id="online-status">Creá una sala o ingresá un código para unirte.</div>
     </div>
+
     <button class="start-btn" id="btn-start-game" onclick="startGame()">COMENZAR PARTIDA →</button>
     <button class="help-btn" onclick="openTutorial()">¿Cómo se juega?</button>
   </div>
@@ -381,6 +411,17 @@ window.startGame = () => {
   startLocalGame();
 };
 window.clearLog = clearLog;
+
+// Modo de estados preparados: las dos opciones de cada carta dejan de ser
+// mitad y mitad (se sortea entre 25% y 75%, de a 5).
+window.togglePrepared = () => {
+  setupCfg.prepared = !setupCfg.prepared;
+  const btn = document.getElementById('btn-prepared');
+  if (btn) {
+    btn.textContent = setupCfg.prepared ? 'SÍ' : 'NO';
+    btn.classList.toggle('on', setupCfg.prepared);
+  }
+};
 window.openTutorial = () => openTutorial();
 window.closeTutorial = closeTutorial;
 
